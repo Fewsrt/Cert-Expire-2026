@@ -1,3 +1,4 @@
+
 # Secure Boot Certificate Management — VMware + Windows Playbook
 
 ## Background
@@ -6,14 +7,6 @@ Microsoft Secure Boot certificates originally issued in 2011 will begin expiring
 Organizations must deploy the **2023 Secure Boot certificates** to all Windows systems (physical and virtual) to continue receiving boot-related security updates.
 
 This document provides an operational playbook for environments running Windows VMs on VMware ESXi 7/8.
-
-Official references:
-
-- Microsoft: Windows Secure Boot certificate expiration and CA updates  
-  https://support.microsoft.com/en-us/topic/windows-secure-boot-certificate-expiration-and-ca-updates-7ff40d33-95dc-4c3c-8725-a9b95457578e
-
-- Microsoft IT Pro Blog – Act now: Secure Boot certificates expire in June 2026  
-  https://techcommunity.microsoft.com/blog/windows-itpro-blog/act-now-secure-boot-certificates-expire-in-june-2026/4426856
 
 ---
 
@@ -37,8 +30,6 @@ Important:
 
 ## Step 1 – Inventory via PowerCLI
 
-Run from vCenter:
-
 ```powershell
 Get-VM | Select Name,
 @{N="SecureBoot";E={$_.ExtensionData.Config.BootOptions.EfiSecureBootEnabled}},
@@ -46,24 +37,12 @@ Get-VM | Select Name,
 Export-Csv secureboot_inventory.csv -NoTypeInformation
 ```
 
-Use this CSV to separate:
-
-- ESXi 8 (supported path)
-- ESXi 7 (requires remediation)
-
 ---
 
 ## Step 2 – Enable Microsoft Managed Secure Boot Updates (inside Windows)
 
-Deploy using SCCM / Intune / GPO / Ansible / PowerCLI Invoke-VMScript.
-
 ```powershell
 reg add HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot /v MicrosoftUpdateManagedOptIn /t REG_DWORD /d 1 /f
-```
-
-Trigger Secure Boot update task:
-
-```powershell
 Start-ScheduledTask -TaskName "\Microsoft\Windows\PI\Secure-Boot-Update"
 ```
 
@@ -73,19 +52,13 @@ Reboot after completion.
 
 ## Step 3 – Verification (inside Windows)
 
-Confirm Secure Boot:
-
 ```powershell
 Confirm-SecureBootUEFI
 ```
 
-Confirm 2023 certificate present:
-
 ```powershell
 [System.Text.Encoding]::ASCII.GetString((Get-SecureBootUEFI db).bytes) -match "Windows UEFI CA 2023"
 ```
-
-Check registry servicing state:
 
 ```powershell
 Get-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\Servicing -Name UEFICA2023Status
@@ -99,8 +72,6 @@ Expected:
 ---
 
 ## ESXi 7 Remediation
-
-If Secure Boot update fails:
 
 Recommended:
 
@@ -123,38 +94,52 @@ Last resort:
 
 ---
 
-## Automation Pattern
+# NEW OPTION – VMware Tools Automation (Agentless)
 
-Layer 1 – vCenter / PowerCLI
+This option is used when SCCM / Intune / GPO are unavailable.
 
-- Inventory
-- Reboot waves
-- Host migration
+PowerCLI uses VMware Tools to execute commands inside the guest OS.
 
-Layer 2 – Windows
+### Requirements
 
-- SCCM / GPO deployment
-- Certificate update
-- Verification
+- VMware Tools running
+- Guest admin credential
+- VM powered on
 
----
-
-## Timeline
-
-- June 2026 – KEK / UEFI CA 2011 expires
-- Oct 2026 – Windows Production PCA expires
-
-Systems not updated will stop receiving boot-level security fixes.
+No WinRM or network access required.
 
 ---
 
-## Recommended Rollout
+## Example – Single VM Test
 
-1. Pilot group (10–20 VMs)
-2. ESXi 8 production
-3. ESXi 7 migration
-4. Compliance validation
-5. Final audit
+```powershell
+Invoke-VMScript -VM VM01 `
+-ScriptText "hostname" `
+-GuestCredential (Get-Credential)
+```
+
+---
+
+## Example – Secure Boot Update via VMware Tools
+
+```powershell
+$cred = Get-Credential
+
+Get-VM | Where {$_.PowerState -eq "PoweredOn"} | Select -First 50 |
+ForEach {
+ Invoke-VMScript -VM $_ -GuestCredential $cred -ScriptText '
+ reg add HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot /v MicrosoftUpdateManagedOptIn /t REG_DWORD /d 1 /f
+ Start-ScheduledTask -TaskName "\Microsoft\Windows\PI\Secure-Boot-Update"
+ shutdown /r /t 60
+ '
+}
+```
+
+Best practice:
+
+- Batch 25–50 VMs
+- Avoid rebooting critical tiers simultaneously
+- Log success / failure
 
 ---
 
@@ -178,6 +163,15 @@ if ($result -match "Windows UEFI CA 2023") {
 - Snapshot before rollout
 - Do not batch reboot critical tiers
 - Monitor Event Log: Microsoft-Windows-Kernel-Boot
+
+---
+
+## Timeline
+
+- June 2026 – KEK / UEFI CA 2011 expires
+- Oct 2026 – Windows Production PCA expires
+
+Systems not updated will stop receiving boot-level security fixes.
 
 ---
 
