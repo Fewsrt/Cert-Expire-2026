@@ -181,6 +181,11 @@ Systems not updated may stop receiving boot-level security fixes.
 
 - 2026-02-07: README formatting improvements + added TH TL;DR, scope, outputs, and ESXi7 caveats
 
+## References
+
+- Microsoft: Secure Boot certificate update guidance (search: "Windows UEFI CA 2023 Secure Boot")
+- VMware: ESXi UEFI Secure Boot / guest operations documentation
+
 ## License
 
 Add a license if you plan to share this broadly (e.g., MIT).
