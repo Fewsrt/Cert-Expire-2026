@@ -31,6 +31,22 @@ This repository is an **operational runbook** for environments running **Windows
 
 **Usually: no hard requirement.** The Microsoft Secure Boot certificate update (UEFI CA 2023) happens **inside Windows** and updates **the guest firmware variables (db/KEK/dbx) presented to the VM**, not the physical ESXi host’s BIOS keys.
 
+### NVRAM/UEFI variables — does it matter?
+
+Yes — **NVRAM persistence is one of the main things that can make the rollout succeed or fail**, especially on **ESXi 7**.
+
+In a VMware VM, UEFI configuration and Secure Boot databases are stored as **UEFI variables** that VMware persists in the VM’s **NVRAM file** (commonly a `*.nvram` file alongside the VM config). When Windows runs the Secure Boot update task, it attempts to write updated variables (db/KEK/dbx). If ESXi/firmware/storage path prevents those writes from persisting, you’ll see:
+
+- The update task runs, you reboot, but verification still shows **CA 2023 not present**
+- Servicing status values don’t move (e.g., `UEFICA2023Status` not reaching the expected state)
+- Symptoms can appear as “works until reboot” / “state resets”
+
+**What to do if you suspect NVRAM persistence issues** (typical priority order):
+1. Patch ESXi to the latest build in the major version you’re running
+2. Check datastore health / free space / snapshot chain issues (VM config files must be writable)
+3. Update server BIOS/UEFI firmware + BMC (vendor)
+4. Migrate affected VMs to **ESXi 8** (often the most reliable fix)
+
 **However: it’s recommended to be on a current vendor firmware when you have ESXi 7 Secure Boot variable issues.** Many “UEFI variable write / NVRAM persistence” problems (seen as updates not sticking after reboot) can be influenced by:
 - ESXi build/patch level
 - ESXi major version (7 vs 8)
@@ -347,9 +363,15 @@ Systems not updated may stop receiving boot-level security fixes.
 
 ### VMware (vSphere / ESXi)
 
-- vSphere Security (landing page):
+- vSphere documentation (landing page):
   - https://docs.vmware.com/en/VMware-vSphere/index.html
   - (Navigate: vSphere -> Security -> Secure Boot / TPM / UEFI topics)
+
+- NVRAM / UEFI variables (best-effort pointers):
+  - VMware KB portal (search within): https://knowledge.broadcom.com/
+  - Suggested searches:
+    - `ESXi 7 UEFI variable write NVRAM secure boot`
+    - `vm nvram file secure boot variables`
 
 ### Linux Secure Boot (shim/GRUB/MOK/SBAT)
 
