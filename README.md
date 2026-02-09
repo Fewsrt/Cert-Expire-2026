@@ -26,6 +26,27 @@ This repository is an **operational runbook** for environments running **Windows
 - Plan for **controlled reboots** and avoid rebooting critical tiers in the same batch.
 - Take **snapshots/checkpoints** where appropriate before rollout.
 
+## ESXi Host BIOS/UEFI Firmware — Do we need to update it?
+
+**Usually: no hard requirement.** The Microsoft Secure Boot certificate update (UEFI CA 2023) happens **inside Windows** and updates **the guest firmware variables (db/KEK/dbx) presented to the VM**, not the physical ESXi host’s BIOS keys.
+
+**However: it’s recommended to be on a current vendor firmware when you have ESXi 7 Secure Boot variable issues.** Many “UEFI variable write / NVRAM persistence” problems (seen as updates not sticking after reboot) can be influenced by:
+- ESXi build/patch level
+- ESXi major version (7 vs 8)
+- System BIOS/UEFI firmware bugs (vendor-specific)
+
+### Practical guidance
+- If your Windows VM update/verification passes on ESXi 8, **you don’t need a BIOS update just because of the cert rollout**.
+- If you are staying on **ESXi 7** and see failures / non-persistent updates, prioritize in this order:
+  1. **Update ESXi to latest patch** within 7.x
+  2. **Update server BIOS/UEFI firmware** to the latest vendor-supported release (plus iDRAC/iLO/BMC if applicable)
+  3. Move affected workloads to **ESXi 8** (best fix in many environments)
+
+### What to document in change records
+- ESXi version/build before/after
+- Server model + BIOS/UEFI firmware version before/after
+- Whether host is booting via UEFI (and whether ESXi Secure Boot is enabled)
+
 ## High-Level Strategy
 
 1. Inventory VMs (Secure Boot state + ESXi version)
@@ -180,6 +201,11 @@ Systems not updated may stop receiving boot-level security fixes.
 ## Change Log
 
 - 2026-02-07: README formatting improvements + added TH TL;DR, scope, outputs, and ESXi7 caveats
+
+## References
+
+- Microsoft: Secure Boot certificate update guidance (search: "Windows UEFI CA 2023 Secure Boot")
+- VMware: ESXi UEFI Secure Boot / guest operations documentation
 
 ## License
 
