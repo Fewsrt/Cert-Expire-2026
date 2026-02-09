@@ -79,6 +79,38 @@ This question comes up a lot because there are **two different Secure Boot world
 
 ## High-Level Strategy
 
+### Flowchart (operator view)
+
+```mermaid
+flowchart TD
+  A[Start] --> B[Inventory: VM Firmware=EFI + SecureBoot?\nHost ESXi version/build?]
+  B --> C{VM uses UEFI + Secure Boot?}
+  C -- No --> Z1[Out of scope\n(does not require UEFI CA 2023 rollout)]
+  C -- Yes --> D{Host is ESXi 8.x?}
+
+  D -- Yes --> E[Inside Windows (guest):\nOpt-in MicrosoftUpdateManagedOptIn=1\nRun Secure-Boot-Update task]
+  E --> F[Reboot VM]
+  F --> G[Verify in Windows:\nCA 2023 present in db\nUEFICA2023Status OK]
+  G --> H{Compliant?}
+  H -- Yes --> I[Report COMPLIANT]
+  H -- No --> J[Retry task + reboot\nCollect logs/status]
+
+  D -- No (ESXi 7.x) --> K[Higher risk: UEFI variables may not persist]
+  K --> L[Patch ESXi 7 to latest build\n(then retry Windows steps)]
+  L --> E
+  J --> M{Still not persistent / failing?}
+  M -- Yes --> N[Update server BIOS/UEFI firmware\n+ BMC (iDRAC/iLO) if needed]
+  N --> E
+  M -- No --> H
+
+  N --> O{Still failing on ESXi 7?}
+  O -- Yes --> P[Migrate VM to ESXi 8 + upgrade VM compatibility]
+  P --> E
+  O -- No --> H
+```
+
+### Checklist
+
 1. Inventory VMs (Secure Boot state + ESXi version)
 2. Prioritize **ESXi 7** workloads for migration to **ESXi 8** where possible
 3. Enable Microsoft-managed Secure Boot updates (inside Windows)
