@@ -121,30 +121,29 @@ If your viewer supports Mermaid:
 
 ```mermaid
 flowchart TD
-  A[Start] --> B[Inventory: VM Firmware=EFI + SecureBoot?\nHost ESXi version/build?]
-  B --> C{VM uses UEFI + Secure Boot?}
-  C -- No --> Z1[Out of scope\n(does not require UEFI CA 2023 rollout)]
-  C -- Yes --> D{Host is ESXi 8.x?}
+  A[Start] --> B["Inventory:<br/>VM Firmware = EFI + Secure Boot?<br/>Host ESXi version/build?"]
+  B --> C{VM uses UEFI<br/>+ Secure Boot?}
+  C -- No --> Z1["Out of scope<br/>(no UEFI CA 2023 required)"]
+  C -- Yes --> D{Host ESXi 8.x?}
 
-  D -- Yes --> E[Inside Windows (guest):\nOpt-in MicrosoftUpdateManagedOptIn=1\nRun Secure-Boot-Update task]
+  D -- Yes --> E["Inside Windows guest:<br/>Set MicrosoftUpdateManagedOptIn=1<br/>Run Secure-Boot-Update task"]
   E --> F[Reboot VM]
-  F --> G[Verify in Windows:\nCA 2023 present in db\nUEFICA2023Status OK]
+  F --> G["Verify in Windows:<br/>CA 2023 present in db<br/>UEFICA2023Status = OK"]
   G --> H{Compliant?}
   H -- Yes --> I[Report COMPLIANT]
-  H -- No --> J[Retry task + reboot\nCollect logs/status]
+  H -- No --> J["Retry task + reboot<br/>Collect logs"]
 
-  D -- No (ESXi 7.x) --> K[Higher risk: UEFI variables may not persist]
-  K --> L[Patch ESXi 7 to latest build\n(then retry Windows steps)]
+  D -- No --> K["ESXi 7.x detected:<br/>UEFI variables may not persist"]
+  K --> L["Patch ESXi 7 to latest build"]
   L --> E
-  J --> M{Still not persistent / failing?}
-  M -- Yes --> N[Update server BIOS/UEFI firmware\n+ BMC (iDRAC/iLO) if needed]
-  N --> E
-  M -- No --> H
 
+  J --> M{Persistent failure?}
+  M -- No --> H
+  M -- Yes --> N["Update server BIOS/UEFI firmware<br/>+ BMC (iDRAC / iLO)"]
   N --> O{Still failing on ESXi 7?}
-  O -- Yes --> P[Migrate VM to ESXi 8 + upgrade VM compatibility]
+  O -- No --> E
+  O -- Yes --> P["Migrate VM to ESXi 8<br/>Upgrade VM compatibility"]
   P --> E
-  O -- No --> H
 ```
 
 ### Checklist
