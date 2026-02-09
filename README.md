@@ -333,27 +333,37 @@ Systems not updated may stop receiving boot-level security fixes.
 
 - 2026-02-07: README formatting improvements + added TH TL;DR, scope, outputs, and ESXi7 caveats
 
-## References (starting points)
+## References (best-effort, stable entry points)
 
-> Note: In this OpenClaw environment I currently can’t use automated web search (Brave API key missing) and browser automation is unavailable, so I can’t guarantee these are the newest URLs. These are **good starting points**; if you paste your organization’s official link set, I can pin exact “latest” docs.
+> I can’t use automated web search in this environment right now, so these are **best-effort stable entry points** (vendor official docs) that are unlikely to disappear. If you paste your organization’s “official link set”, I can replace these with the exact pages you want.
 
-### Microsoft
-- Search terms (use with your preferred search engine):
-  - `Windows UEFI CA 2023 Secure Boot`
-  - `Secure Boot certificate update June 2026`
-  - `UEFICA2023Status`
-  - `MicrosoftUpdateManagedOptIn SecureBoot`
+### Microsoft (Windows Secure Boot)
 
-### VMware
-- Search terms:
-  - `ESXi 7 UEFI variable write Secure Boot`
-  - `ESXi Secure Boot virtual machine UEFI variables`
+- Secure Boot (Windows security baseline / concept):
+  - https://learn.microsoft.com/windows-hardware/design/device-experiences/oem-secure-boot
+- PowerShell cmdlets used in this runbook:
+  - `Confirm-SecureBootUEFI`: https://learn.microsoft.com/powershell/module/secureboot/confirm-securebootuefi
+  - `Get-SecureBootUEFI`: https://learn.microsoft.com/powershell/module/secureboot/get-securebootuefi
 
-### Linux Secure Boot (shim/GRUB/SBAT)
-- Search terms:
-  - `shim SBAT revocation dbx`
-  - `mokutil sb-state`
-  - `<distro> secure boot shim update`
+### VMware (vSphere / ESXi)
+
+- vSphere Security (landing page):
+  - https://docs.vmware.com/en/VMware-vSphere/index.html
+  - (Navigate: vSphere -> Security -> Secure Boot / TPM / UEFI topics)
+
+### Linux Secure Boot (shim/GRUB/MOK/SBAT)
+
+- `mokutil` (MOK manager tooling; distro packages provide the man page):
+  - Ubuntu manpage (example): https://manpages.ubuntu.com/manpages/jammy/man1/mokutil.1.html
+- SBAT background (shim / revocation model):
+  - shim project repo: https://github.com/rhboot/shim
+  - (Search within repo for `SBAT` / `sbat.csv` / revocation notes)
+
+### Reference mapping (where each link is used)
+
+- Windows verification steps: `Confirm-SecureBootUEFI`, `Get-SecureBootUEFI` → Microsoft PowerShell module docs above
+- Linux verification steps: `mokutil --sb-state` → mokutil manpage above
+- VMware host-side concepts: Secure Boot/UEFI/TPM → VMware vSphere docs landing page above
 
 ## License
 
