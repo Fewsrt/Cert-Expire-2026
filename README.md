@@ -26,7 +26,10 @@
 ### 5) Automation
 - [docs/08-automation-vmware-tools.md](docs/08-automation-vmware-tools.md)
 
-### 6) References
+### 6) Sandbox / simulation (test all cases)
+- [docs/11-sandbox-simulation-use-cases.md](docs/11-sandbox-simulation-use-cases.md)
+
+### 7) References
 - [docs/10-references.md](docs/10-references.md)
 
 ---
