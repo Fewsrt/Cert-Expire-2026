@@ -57,6 +57,26 @@ This repository is an **operational runbook** for environments running **Windows
 
 **Operationally:** for this Microsoft UEFI CA 2023 rollout, tracking **(a) BIOS/UEFI firmware version** and **(b) Secure Boot enabled/disabled** on the ESXi host is usually sufficient.
 
+### FAQ — What if the host is still “2011” but the VM/Windows is already “2023”?
+
+This question comes up a lot because there are **two different Secure Boot worlds**:
+- **Host firmware Secure Boot keys** (physical server BIOS/UEFI PK/KEK/db/dbx)
+- **Guest/VM Secure Boot variables** (what Windows updates inside the VM)
+
+**For VMware Windows VMs:**
+- If Windows/VM already has **Windows UEFI CA 2023** present/verified, but the **physical ESXi host firmware still has older (2011-era) keys**, it is **usually fine**.
+- The VM boot trust chain is validated against the **VM’s Secure Boot variables**, not the host’s BIOS key database.
+
+**Where problems usually happen:**
+- When updates **do not persist** after reboot on **ESXi 7** (UEFI variable write/NVRAM persistence issues). In that case, the fix is typically **ESXi patching / firmware updates / migrate to ESXi 8**, not “install CA 2023 into host BIOS”.
+
+**For physical OS booting directly on hardware (non-VM):**
+- If the OS/bootloader chain requires **2023** but firmware only trusts **2011**, you can hit **Secure Boot verification failures** (won’t boot with Secure Boot on). This is vendor/OS-specific.
+
+**Bottom line:**
+- For this runbook scope (Windows VMs on ESXi), treat “host BIOS keys still 2011” as **not the primary risk**.
+- Treat **ESXi 7 + UEFI variable persistence** as the primary risk; mitigate via **patching and/or ESXi 8**.
+
 ## High-Level Strategy
 
 1. Inventory VMs (Secure Boot state + ESXi version)
