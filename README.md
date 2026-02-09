@@ -47,6 +47,16 @@ This repository is an **operational runbook** for environments running **Windows
 - Server model + BIOS/UEFI firmware version before/after
 - Whether host is booting via UEFI (and whether ESXi Secure Boot is enabled)
 
+### Can we view the host BIOS Secure Boot certificates (PK/KEK/db/dbx)?
+- **Not in a standard, portable way from ESXi/vCenter.** ESXi can report **whether Secure Boot is enabled**, but it typically does **not provide a supported command/API to dump the platform key databases** (PK/KEK/db/dbx) from the server firmware.
+- If you must audit BIOS-level Secure Boot keys, use the **server vendor tooling/UI**:
+  - Dell: iDRAC / Lifecycle Controller (or `racadm`)
+  - HPE: iLO / Intelligent Provisioning
+  - Lenovo: XCC
+  - Or directly in the **BIOS/UEFI setup** screens
+
+**Operationally:** for this Microsoft UEFI CA 2023 rollout, tracking **(a) BIOS/UEFI firmware version** and **(b) Secure Boot enabled/disabled** on the ESXi host is usually sufficient.
+
 ## High-Level Strategy
 
 1. Inventory VMs (Secure Boot state + ESXi version)
