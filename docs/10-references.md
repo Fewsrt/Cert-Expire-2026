@@ -15,6 +15,12 @@
 - Broadcom KB portal:
   - https://knowledge.broadcom.com/
 
+### Broadcom KBs referenced in this runbook
+- KB 421593 — Missing Microsoft Corporation KEK CA 2023 Certificate on Windows VMs in ESXi
+  - https://knowledge.broadcom.com/external/article/421593/missing-microsoft-corporation-kek-ca-202.html
+- KB 423919 — Manual Update of the Secure Boot Platform Key in Virtual Machines
+  - https://knowledge.broadcom.com/external/article/423919/manual-update-of-the-secure-boot-platfor.html
+
 Suggested KB searches:
 - `ESXi 7 UEFI variable write NVRAM secure boot`
 - `ESXi 8 UEFI variable write NVRAM secure boot`

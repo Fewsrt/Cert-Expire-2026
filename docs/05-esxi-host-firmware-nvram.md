@@ -25,7 +25,17 @@ When Windows runs the Secure Boot update task, it attempts to write updated UEFI
 4. Prefer ESXi 8 for affected workloads
 
 ### ESXi 8 note
-ESXi 8 is generally better, but **NVRAM/UEFI persistence problems can still exist** if there are underlying datastore/firmware issues. Treat ESXi version as “risk reducer”, not a guarantee.
+ESXi 8 is generally better, but **NVRAM/UEFI persistence problems can still exist**.
+
+Broadcom KB notes two ESXi 8-relevant NVRAM/PK/KEK failure patterns:
+- **KB 421593**: VMs originally created on ESXi versions earlier than 8.0.2 may have a legacy `*.nvram` that does not include the expected **Microsoft Corporation KEK CA 2023** until the NVRAM is regenerated.
+- **KB 423919**: VMs with an invalid **Platform Key (PK)** signature can fail automated updates to Secure Boot databases (DB/DBX/KEK) on ESXi 7.x/8.x.
+
+Treat ESXi 8 as a risk reducer, not a guarantee.
+
+Refs:
+- https://knowledge.broadcom.com/external/article/421593/missing-microsoft-corporation-kek-ca-202.html
+- https://knowledge.broadcom.com/external/article/423919/manual-update-of-the-secure-boot-platfor.html
 
 ## Can we dump host BIOS PK/KEK/db/dbx from ESXi?
 Not in a standard, portable way from ESXi/vCenter. Use vendor tooling (iDRAC/iLO/XCC) or BIOS setup UI.
