@@ -1,0 +1,26 @@
+{
+  "name": "cert-expire-2026",
+  "version": "1.0.0",
+  "description": "> TL;DR (TH): ใบรับรอง Secure Boot ชุดเก่า (2011) จะเริ่มหมดอายุช่วง **Jun 2026** > ต้องทำให้ Windows ติดตั้ง/อัพเดทไปใช้ **Windows UEFI CA 2023** ให้ครบ โดยเฉพาะ VM บน **ESXi 7** ที่มักมีปัญหาเขียน UEFI variables / NVRAM persistence",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Fewsrt/Cert-Expire-2026.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Fewsrt/Cert-Expire-2026/issues"
+  },
+  "homepage": "https://github.com/Fewsrt/Cert-Expire-2026#readme",
+  "dependencies": {
+    "pdfkit": "^0.17.2"
+  }
+}
