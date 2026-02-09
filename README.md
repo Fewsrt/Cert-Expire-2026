@@ -12,7 +12,8 @@ This repository is an **operational runbook** for environments running **Windows
 
 ## Scope / Audience
 
-- Windows workloads running with **UEFI + Secure Boot**
+- Windows workloads running with **UEFI + Secure Boot** (primary scope)
+- Linux workloads running with **UEFI + Secure Boot** (impact notes + verification guidance included)
 - VMware vSphere / ESXi **7.x and 8.x**
 - Operators using:
   - PowerShell / PowerCLI
@@ -155,6 +156,37 @@ flowchart TD
 5. Reboot
 6. Verify certificates
 7. Report compliance
+
+---
+
+## Linux VMs — Impact & verification (UEFI + Secure Boot)
+
+### Will Linux VMs be impacted?
+
+**Possibly, but the failure mode is different from Windows.** The Windows UEFI CA 2023 rollout described in this runbook is Windows-specific, but Linux VMs that boot with **UEFI + Secure Boot** can be impacted by:
+
+- **dbx (revocation list) updates**: firmware/dbx updates can revoke older vulnerable bootloaders.
+- **Old shim/GRUB signatures**: if your distro uses an older **shim** that gets revoked, Secure Boot may block boot.
+- **SBAT enforcement**: newer ecosystems rely on SBAT metadata to allow granular revocations; older shim builds without proper SBAT can be blocked in some scenarios.
+
+**Typical symptoms when impacted**
+- VM stops booting with Secure Boot enabled (bootloader verification failure)
+- Requires temporarily disabling Secure Boot to recover (then update shim/grub/kernel)
+
+### Recommended approach
+- Keep Linux VMs on vendor-supported versions and apply security updates regularly.
+- Before any broad Secure Boot/dbx enforcement changes, test on a non-critical Linux VM.
+
+### Quick verification (inside Linux)
+
+> Commands vary by distro; examples below are generic.
+
+- Confirm boot mode / Secure Boot state (when available):
+  - `mokutil --sb-state` (needs `mokutil` installed)
+- Check enrolled keys/MOKs (optional):
+  - `mokutil --list-enrolled`
+
+If `mokutil` is unavailable, check distro docs for Secure Boot verification steps.
 
 ---
 
@@ -301,10 +333,27 @@ Systems not updated may stop receiving boot-level security fixes.
 
 - 2026-02-07: README formatting improvements + added TH TL;DR, scope, outputs, and ESXi7 caveats
 
-## References
+## References (starting points)
 
-- Microsoft: Secure Boot certificate update guidance (search: "Windows UEFI CA 2023 Secure Boot")
-- VMware: ESXi UEFI Secure Boot / guest operations documentation
+> Note: In this OpenClaw environment I currently can’t use automated web search (Brave API key missing) and browser automation is unavailable, so I can’t guarantee these are the newest URLs. These are **good starting points**; if you paste your organization’s official link set, I can pin exact “latest” docs.
+
+### Microsoft
+- Search terms (use with your preferred search engine):
+  - `Windows UEFI CA 2023 Secure Boot`
+  - `Secure Boot certificate update June 2026`
+  - `UEFICA2023Status`
+  - `MicrosoftUpdateManagedOptIn SecureBoot`
+
+### VMware
+- Search terms:
+  - `ESXi 7 UEFI variable write Secure Boot`
+  - `ESXi Secure Boot virtual machine UEFI variables`
+
+### Linux Secure Boot (shim/GRUB/SBAT)
+- Search terms:
+  - `shim SBAT revocation dbx`
+  - `mokutil sb-state`
+  - `<distro> secure boot shim update`
 
 ## License
 
