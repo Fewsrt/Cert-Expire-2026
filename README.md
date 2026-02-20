@@ -1,212 +1,46 @@
 # Secure Boot Certificate Management (2011 → 2023) — VMware + Windows Playbook
 
-> TL;DR (TH): ใบรับรอง Secure Boot ชุดเก่า (2011) จะเริ่มหมดอายุช่วง **Jun 2026**  
-> ต้องทำให้ Windows ติดตั้ง/อัพเดทไปใช้ **Windows UEFI CA 2023** ให้ครบ โดยเฉพาะ VM บน **ESXi 7** ที่มักมีปัญหาเขียน UEFI variables
+> TL;DR (TH): ใบรับรอง Secure Boot ชุดเก่า (2011) จะเริ่มหมดอายุช่วง **Jun 2026**
+> ต้องทำให้ Windows ติดตั้ง/อัพเดทไปใช้ **Windows UEFI CA 2023** ให้ครบ โดยเฉพาะ VM บน **ESXi 7** ที่มักมีปัญหาเขียน UEFI variables / NVRAM persistence
 
-## Background
+## Categories (board)
 
-Microsoft Secure Boot certificates originally issued in **2011** will begin expiring in **June 2026**.  
-Organizations should ensure the **2023 Secure Boot certificates** are deployed across Windows systems (physical and virtual) to continue receiving boot-related security updates.
+### 0) Start here
+- [docs/01-background-scope.md](docs/01-background-scope.md)
+- [docs/09-flowcharts.md](docs/09-flowcharts.md)
 
-This repository is an **operational runbook** for environments running **Windows VMs on VMware ESXi 7/8**.
+### 1) Inventory
+- [docs/02-inventory-powercli.md](docs/02-inventory-powercli.md)
 
-## Scope / Audience
+### 2) Windows rollout (guest)
+- [docs/03-windows-opt-in-and-trigger.md](docs/03-windows-opt-in-and-trigger.md)
+- [docs/04-verification-windows.md](docs/04-verification-windows.md)
 
-- Windows workloads running with **UEFI + Secure Boot**
-- VMware vSphere / ESXi **7.x and 8.x**
-- Operators using:
-  - PowerShell / PowerCLI
-  - Optional: VMware Tools guest operations (agentless execution)
+### 3) ESXi host considerations
+- [docs/05-esxi-host-firmware-nvram.md](docs/05-esxi-host-firmware-nvram.md)
+- [docs/06-esxi7-remediation.md](docs/06-esxi7-remediation.md)
 
-## Key Notes (Read First)
+### 4) Linux VMs (UEFI + Secure Boot)
+- [docs/07-linux-vms-secure-boot.md](docs/07-linux-vms-secure-boot.md)
 
-- **Windows performs the certificate updates internally.** vCenter does not “push” Secure Boot certs directly.
-- **ESXi 8** generally supports Secure Boot variable updates correctly.
-- **ESXi 7** may block UEFI variable writes → updates can fail or not persist.
-- Plan for **controlled reboots** and avoid rebooting critical tiers in the same batch.
-- Take **snapshots/checkpoints** where appropriate before rollout.
+### 5) Automation
+- [docs/08-automation-vmware-tools.md](docs/08-automation-vmware-tools.md)
 
-## ESXi Host BIOS/UEFI Firmware — Do we need to update it?
+### 6) Sandbox / simulation (test all cases)
+- [docs/11-sandbox-simulation-use-cases.md](docs/11-sandbox-simulation-use-cases.md)
 
-**Usually: no hard requirement.** The Microsoft Secure Boot certificate update (UEFI CA 2023) happens **inside Windows** and updates **the guest firmware variables (db/KEK/dbx) presented to the VM**, not the physical ESXi host’s BIOS keys.
-
-**However: it’s recommended to be on a current vendor firmware when you have ESXi 7 Secure Boot variable issues.** Many “UEFI variable write / NVRAM persistence” problems (seen as updates not sticking after reboot) can be influenced by:
-- ESXi build/patch level
-- ESXi major version (7 vs 8)
-- System BIOS/UEFI firmware bugs (vendor-specific)
-
-### Practical guidance
-- If your Windows VM update/verification passes on ESXi 8, **you don’t need a BIOS update just because of the cert rollout**.
-- If you are staying on **ESXi 7** and see failures / non-persistent updates, prioritize in this order:
-  1. **Update ESXi to latest patch** within 7.x
-  2. **Update server BIOS/UEFI firmware** to the latest vendor-supported release (plus iDRAC/iLO/BMC if applicable)
-  3. Move affected workloads to **ESXi 8** (best fix in many environments)
-
-### What to document in change records
-- ESXi version/build before/after
-- Server model + BIOS/UEFI firmware version before/after
-- Whether host is booting via UEFI (and whether ESXi Secure Boot is enabled)
-
-## High-Level Strategy
-
-1. Inventory VMs (Secure Boot state + ESXi version)
-2. Prioritize **ESXi 7** workloads for migration to **ESXi 8** where possible
-3. Enable Microsoft-managed Secure Boot updates (inside Windows)
-4. Trigger the Secure Boot update scheduled task
-5. Reboot
-6. Verify certificates
-7. Report compliance
+### 7) References
+- [docs/10-references.md](docs/10-references.md)
 
 ---
 
-## Step 1 — Inventory via PowerCLI
+## Notes on “ESXi 8 also affected by NVRAM”
 
-```powershell
-Get-VM | Select Name,
-@{N="SecureBoot";E={$_.ExtensionData.Config.BootOptions.EfiSecureBootEnabled}},
-@{N="ESXi";E={$_.VMHost.Version}} |
-Export-Csv secureboot_inventory.csv -NoTypeInformation
-```
+It’s possible for NVRAM/UEFI variable persistence issues to occur on any ESXi version if there are underlying problems (datastore health, permissions, firmware bugs). ESXi 8 reduces risk but is not an absolute guarantee.
 
-**Output:** `secureboot_inventory.csv`
-
----
-
-## Step 2 — Opt-in to Microsoft-managed Secure Boot updates (inside Windows)
-
-```powershell
-reg add HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot /v MicrosoftUpdateManagedOptIn /t REG_DWORD /d 1 /f
-Start-ScheduledTask -TaskName "\Microsoft\Windows\PI\Secure-Boot-Update"
-```
-
-Reboot after completion.
-
----
-
-## Step 3 — Verification (inside Windows)
-
-### Confirm Secure Boot is enabled
-
-```powershell
-Confirm-SecureBootUEFI
-```
-
-### Confirm Windows UEFI CA 2023 is present in DB
-
-```powershell
-[System.Text.Encoding]::ASCII.GetString((Get-SecureBootUEFI db).bytes) -match "Windows UEFI CA 2023"
-```
-
-### Check servicing status
-
-```powershell
-Get-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\Servicing -Name UEFICA2023Status
-```
-
-**Expected (typical):**
-- SecureBoot = `True`
-- `UEFICA2023Status = 1`
-
----
-
-## ESXi 7 Remediation Guidance
-
-### Recommended
-
-1. Migrate VM to **ESXi 8**
-2. Upgrade VM hardware compatibility
-3. Retry certificate update
-
-### Fallback
-
-1. Power off VM
-2. Disable Secure Boot
-3. Boot
-4. Patch Windows
-5. Re-enable Secure Boot
-6. Reboot
-
-### Last resort
-
-- Rebuild VM on ESXi 8
-
----
-
-## Optional — VMware Tools Automation (Agentless)
-
-Use when SCCM / Intune / GPO are unavailable.  
-PowerCLI uses VMware Tools to execute commands inside the guest OS.
-
-### Requirements
-
-- VMware Tools running
-- Guest admin credential
-- VM powered on
-
-> No WinRM or network access required.
-
-### Example — Single VM test
-
-```powershell
-Invoke-VMScript -VM VM01 `
--ScriptText "hostname" `
--GuestCredential (Get-Credential)
-```
-
-### Example — Batch Secure Boot update via VMware Tools
-
-```powershell
-$cred = Get-Credential
-
-Get-VM | Where {$_.PowerState -eq "PoweredOn"} | Select -First 50 |
-ForEach-Object {
-  Invoke-VMScript -VM $_ -GuestCredential $cred -ScriptText '
-    reg add HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot /v MicrosoftUpdateManagedOptIn /t REG_DWORD /d 1 /f
-    Start-ScheduledTask -TaskName "\\Microsoft\\Windows\\PI\\Secure-Boot-Update"
-    shutdown /r /t 60
-  '
-}
-```
-
-**Best practice**
-- Batch 25–50 VMs
-- Stagger reboots by tier/criticality
-- Log success/failure per VM
-
----
-
-## Compliance Script Example (inside Windows)
-
-```powershell
-$result = [System.Text.Encoding]::ASCII.GetString((Get-SecureBootUEFI db).bytes)
-
-if ($result -match "Windows UEFI CA 2023") {
-  "COMPLIANT"
-} else {
-  "NON-COMPLIANT"
-}
-```
-
----
-
-## Timeline (High level)
-
-- **June 2026** – KEK / UEFI CA 2011 expires
-- **Oct 2026** – Windows Production PCA expires
-
-Systems not updated may stop receiving boot-level security fixes.
-
----
+If you have a specific Broadcom KB that states this, paste the KB URL/ID and I will pin it into the references and update the wording accordingly.
 
 ## Change Log
 
 - 2026-02-07: README formatting improvements + added TH TL;DR, scope, outputs, and ESXi7 caveats
-
-## References
-
-- Microsoft: Secure Boot certificate update guidance (search: "Windows UEFI CA 2023 Secure Boot")
-- VMware: ESXi UEFI Secure Boot / guest operations documentation
-
-## License
-
-Add a license if you plan to share this broadly (e.g., MIT).
+- 2026-02-09: Split runbook into categorized docs under `docs/`
