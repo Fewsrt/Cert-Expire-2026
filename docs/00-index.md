@@ -15,3 +15,4 @@ This folder splits the runbook into topic-focused documents.
 - [12-update-checklist-baremetal-esxi.md](12-update-checklist-baremetal-esxi.md)
 - [13-final-compliance-check.md](13-final-compliance-check.md)
 - [14-vm-ca2023-test-cases.md](14-vm-ca2023-test-cases.md)
+- [15-minimum-vm-os-esxi-test-list.md](15-minimum-vm-os-esxi-test-list.md)
