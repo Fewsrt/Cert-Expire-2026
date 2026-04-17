@@ -141,6 +141,7 @@ Field สำคัญ:
   ```
 - เว็บจะเรียก Firebase Storage เฉพาะเมื่อ config มี `enableStorage: true` และ `storageBucket` เท่านั้น
 - ถ้า Firebase Storage ยังไม่ได้ set up หรือ project ยังเป็น no-billing ที่สร้าง bucket ไม่ได้ เว็บจะ fallback ไปเก็บรูปขนาดเล็กเป็น inline data ใน Firestore
-- โหมด fallback จำกัดรูปไม่เกิน 700 KB ต่อไฟล์ เพื่อเลี่ยง Firestore document size limit
+- ก่อนบันทึก เว็บจะ compress รูปอัตโนมัติใน browser เป็น JPEG
+- โหมด fallback จะพยายาม compress ให้เหลือประมาณ 420 KB ต่อไฟล์ เพื่อเลี่ยง Firestore document size limit
 
 หมายเหตุ: Firebase Storage default bucket สำหรับ project ใหม่หลัง October 30, 2024 ต้องใช้ Blaze/pay-as-you-go ในการ provision bucket ตาม Firebase policy ปัจจุบัน

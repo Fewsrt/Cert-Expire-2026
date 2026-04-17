@@ -284,7 +284,11 @@ const elements = {
   summaryImpact: document.querySelector("#summary-impact"),
   platformSummary: document.querySelector("#platform-summary"),
   keyFindings: document.querySelector("#key-findings"),
-  summaryCaseCards: document.querySelector("#summary-case-cards")
+  summaryCaseCards: document.querySelector("#summary-case-cards"),
+  imageModal: document.querySelector("#image-modal"),
+  modalImage: document.querySelector("#modal-image"),
+  modalCaption: document.querySelector("#modal-caption"),
+  closeImageModal: document.querySelector("#close-image-modal")
 };
 
 init();
@@ -351,6 +355,11 @@ function wireEvents() {
     results = {};
     render();
   });
+
+  elements.closeImageModal.addEventListener("click", () => closeImageModal());
+  elements.imageModal.addEventListener("click", (event) => {
+    if (event.target === elements.imageModal) closeImageModal();
+  });
 }
 
 function render() {
@@ -398,7 +407,7 @@ function renderCase(testCase) {
     const field = form.elements[key];
     if (field && field.type !== "file") field.value = value || "";
   });
-  renderEvidenceGallery(fragment.querySelector(".evidence-gallery"), result.evidenceImages || []);
+  renderEvidenceGallery(fragment.querySelector(".evidence-gallery"), testCase.id, result.evidenceImages || []);
 
   fragment.querySelector(".updated-at").textContent = result.updatedAt
     ? `บันทึกล่าสุด: ${formatDate(result.updatedAt)}`
@@ -462,7 +471,7 @@ function fillCommands(container, commands) {
   });
 }
 
-function renderEvidenceGallery(container, images) {
+function renderEvidenceGallery(container, caseId, images) {
   container.innerHTML = "";
   if (!images.length) {
     const empty = document.createElement("p");
@@ -472,15 +481,57 @@ function renderEvidenceGallery(container, images) {
     return;
   }
 
-  images.forEach((image) => {
-    const link = document.createElement("a");
-    link.href = image.url;
-    link.target = "_blank";
-    link.rel = "noreferrer";
-    link.title = image.name || "evidence";
-    link.innerHTML = `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || "evidence image")}">`;
-    container.appendChild(link);
+  images.forEach((image, index) => {
+    const item = document.createElement("div");
+    item.className = "evidence-item";
+    const preview = document.createElement("button");
+    preview.type = "button";
+    preview.className = "evidence-preview";
+    preview.title = image.name || "evidence";
+    preview.innerHTML = `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || "evidence image")}">`;
+    preview.addEventListener("click", () => openImageModal(image));
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "delete-image";
+    remove.textContent = "ลบรูป";
+    remove.addEventListener("click", async () => {
+      await deleteEvidenceImage(caseId, index);
+    });
+
+    item.appendChild(preview);
+    item.appendChild(remove);
+    container.appendChild(item);
   });
+}
+
+function openImageModal(image) {
+  elements.modalImage.src = image.url;
+  elements.modalImage.alt = image.name || "evidence preview";
+  elements.modalCaption.textContent = `${image.name || "evidence"} · ${formatBytes(image.size || 0)} · ${image.source || "image"}`;
+  elements.imageModal.showModal();
+}
+
+function closeImageModal() {
+  elements.imageModal.close();
+  elements.modalImage.removeAttribute("src");
+  elements.modalCaption.textContent = "";
+}
+
+async function deleteEvidenceImage(caseId, index) {
+  const current = results[caseId] || defaultResult();
+  const images = [...(current.evidenceImages || [])];
+  images.splice(index, 1);
+  const nextResult = {
+    ...current,
+    caseId,
+    evidenceImages: images,
+    updatedAt: new Date().toISOString()
+  };
+  await saveResult(caseId, nextResult);
+  results[caseId] = nextResult;
+  saveLocalResults(results);
+  render();
 }
 
 function filterCases() {
@@ -611,6 +662,20 @@ function renderSummaryCards() {
       <p>Root cause: ${escapeHtml(result.rootCause || "-")}</p>
       <p>Updated: ${escapeHtml(result.updatedAt ? formatDate(result.updatedAt) : "-")}</p>
     `;
+    const images = (result.evidenceImages || []).slice(0, 4);
+    if (images.length) {
+      const row = document.createElement("div");
+      row.className = "summary-thumb-row";
+      images.forEach((image) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.title = image.name || "evidence";
+        button.innerHTML = `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || "evidence image")}">`;
+        button.addEventListener("click", () => openImageModal(image));
+        row.appendChild(button);
+      });
+      card.appendChild(row);
+    }
     elements.summaryCaseCards.appendChild(card);
   });
 }
@@ -686,16 +751,13 @@ async function uploadEvidenceImages(caseId, files) {
       alert(`ข้ามไฟล์ ${file.name}: รองรับเฉพาะรูปภาพ`);
       continue;
     }
-    if (file.size > 10 * 1024 * 1024) {
-      alert(`ข้ามไฟล์ ${file.name}: ไฟล์ใหญ่กว่า 10 MB`);
-      continue;
-    }
+    const prepared = await compressImageFile(file);
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
     const path = `${EVIDENCE_PATH}/${caseId}/${Date.now()}-${safeName}`;
     try {
       const fileRef = storageApi.ref(storageApi.storage, path);
-      await storageApi.uploadBytes(fileRef, file, {
-        contentType: file.type,
+      await storageApi.uploadBytes(fileRef, prepared.blob, {
+        contentType: prepared.contentType,
         customMetadata: { caseId }
       });
       const url = await storageApi.getDownloadURL(fileRef);
@@ -703,8 +765,9 @@ async function uploadEvidenceImages(caseId, files) {
         name: file.name,
         path,
         url,
-        contentType: file.type,
-        size: file.size,
+        contentType: prepared.contentType,
+        originalSize: file.size,
+        size: prepared.blob.size,
         source: "firebase-storage",
         uploadedAt: new Date().toISOString()
       });
@@ -727,25 +790,22 @@ async function filesToInlineEvidence(files, reason) {
 }
 
 function fileToInlineEvidence(file, reason) {
-  return new Promise((resolve) => {
+  return new Promise(async (resolve) => {
     if (!file.type.startsWith("image/")) {
       alert(`ข้ามไฟล์ ${file.name}: รองรับเฉพาะรูปภาพ`);
       resolve(null);
       return;
     }
-    if (file.size > 700 * 1024) {
-      alert(`ข้ามไฟล์ ${file.name}: no-billing fallback รองรับรูปไม่เกิน 700 KB ต่อไฟล์`);
-      resolve(null);
-      return;
-    }
+    const prepared = await compressImageFile(file, { maxBytes: 420 * 1024 });
     const reader = new FileReader();
     reader.onload = () => {
       resolve({
         name: file.name,
         path: "",
         url: reader.result,
-        contentType: file.type,
-        size: file.size,
+        contentType: prepared.contentType,
+        originalSize: file.size,
+        size: prepared.blob.size,
         source: "firestore-inline",
         note: reason,
         uploadedAt: new Date().toISOString()
@@ -755,7 +815,72 @@ function fileToInlineEvidence(file, reason) {
       alert(`อ่านไฟล์ ${file.name} ไม่สำเร็จ`);
       resolve(null);
     };
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(prepared.blob);
+  });
+}
+
+async function compressImageFile(file, options = {}) {
+  const maxBytes = options.maxBytes || 650 * 1024;
+  const image = await loadImage(file);
+  let maxDimension = options.maxDimension || 1600;
+  let quality = 0.82;
+  let blob = null;
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const { canvas } = drawImageToCanvas(image, maxDimension);
+    blob = await canvasToBlob(canvas, "image/jpeg", quality);
+    if (blob.size <= maxBytes) break;
+    if (quality > 0.45) {
+      quality -= 0.12;
+    } else {
+      maxDimension = Math.max(720, Math.floor(maxDimension * 0.78));
+      quality = 0.72;
+    }
+  }
+
+  return {
+    blob,
+    contentType: "image/jpeg"
+  };
+}
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(`Cannot load image ${file.name}`));
+    };
+    image.src = url;
+  });
+}
+
+function drawImageToCanvas(image, maxDimension) {
+  const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  context.drawImage(image, 0, 0, width, height);
+  return { canvas, width, height };
+}
+
+function canvasToBlob(canvas, type, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("Image compression failed"));
+        return;
+      }
+      resolve(blob);
+    }, type, quality);
   });
 }
 
@@ -930,6 +1055,12 @@ function formatDate(value) {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(date);
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return "0 KB";
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function escapeHtml(value) {
