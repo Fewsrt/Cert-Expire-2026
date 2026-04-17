@@ -32,6 +32,12 @@
 ### 7) References
 - [docs/10-references.md](docs/10-references.md)
 
+### 8) One-page checklist
+- [docs/12-update-checklist-baremetal-esxi.md](docs/12-update-checklist-baremetal-esxi.md)
+
+### 9) Final compliance
+- [docs/13-final-compliance-check.md](docs/13-final-compliance-check.md)
+
 ---
 
 ## Notes on “ESXi 8 also affected by NVRAM”

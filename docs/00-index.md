@@ -12,3 +12,5 @@ This folder splits the runbook into topic-focused documents.
 - [08-automation-vmware-tools.md](08-automation-vmware-tools.md)
 - [09-flowcharts.md](09-flowcharts.md)
 - [10-references.md](10-references.md)
+- [12-update-checklist-baremetal-esxi.md](12-update-checklist-baremetal-esxi.md)
+- [13-final-compliance-check.md](13-final-compliance-check.md)

@@ -31,3 +31,15 @@ Suggested KB searches:
   - https://manpages.ubuntu.com/manpages/jammy/man1/mokutil.1.html
 - shim project (SBAT background):
   - https://github.com/rhboot/shim
+- Microsoft 2026 Secure Boot certificate update guidance:
+  - https://support.microsoft.com/en-us/topic/secure-boot-certificate-updates-guidance-for-it-professionals-and-organizations-e2b43f9f-b424-42df-bc6a-8476db65ab2f
+- Microsoft Secure Boot expiration + CA update note:
+  - https://support.microsoft.com/en-us/topic/windows-secure-boot-certificate-expiration-and-ca-updates-7ff40d33-95dc-4c3c-8725-a9b95457578e
+- Red Hat 2026 guidance (RHEL environments):
+  - https://developers.redhat.com/articles/2026/02/04/secure-boot-certificate-changes-2026-guidance-rhel-environments
+- Red Hat article on revocations/shim versions:
+  - https://access.redhat.com/articles/5991201
+- Oracle Linux Secure Boot notice:
+  - https://docs.oracle.com/en/operating-systems/oracle-linux/notice-sboot/
+- Ubuntu package index (`shim-signed`):
+  - https://packages.ubuntu.com/shim-signed
