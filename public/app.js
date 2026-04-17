@@ -258,6 +258,8 @@ let firebaseApi = null;
 let storageApi = null;
 let unsubscribe = null;
 let results = loadLocalResults();
+let activeImage = null;
+let imageZoom = 1;
 
 const elements = {
   testsView: document.querySelector("#tests-view"),
@@ -289,7 +291,11 @@ const elements = {
   imageModal: document.querySelector("#image-modal"),
   modalImage: document.querySelector("#modal-image"),
   modalCaption: document.querySelector("#modal-caption"),
-  closeImageModal: document.querySelector("#close-image-modal")
+  closeImageModal: document.querySelector("#close-image-modal"),
+  zoomOutImage: document.querySelector("#zoom-out-image"),
+  zoomResetImage: document.querySelector("#zoom-reset-image"),
+  zoomInImage: document.querySelector("#zoom-in-image"),
+  downloadImage: document.querySelector("#download-image")
 };
 
 init();
@@ -368,6 +374,12 @@ function wireEvents() {
   elements.closeImageModal.addEventListener("click", () => closeImageModal());
   elements.imageModal.addEventListener("click", (event) => {
     if (event.target === elements.imageModal) closeImageModal();
+  });
+  elements.zoomOutImage.addEventListener("click", () => setImageZoom(imageZoom - 0.25));
+  elements.zoomResetImage.addEventListener("click", () => setImageZoom(1));
+  elements.zoomInImage.addEventListener("click", () => setImageZoom(imageZoom + 0.25));
+  elements.downloadImage.addEventListener("click", () => {
+    if (activeImage) downloadImage(activeImage);
   });
 }
 
@@ -508,23 +520,49 @@ function renderEvidenceGallery(container, caseId, images) {
       await deleteEvidenceImage(caseId, index);
     });
 
+    const download = document.createElement("button");
+    download.type = "button";
+    download.className = "download-image";
+    download.textContent = "Download";
+    download.addEventListener("click", () => downloadImage(image));
+
     item.appendChild(preview);
+    item.appendChild(download);
     item.appendChild(remove);
     container.appendChild(item);
   });
 }
 
 function openImageModal(image) {
+  activeImage = image;
   elements.modalImage.src = image.url;
   elements.modalImage.alt = image.name || "evidence preview";
   elements.modalCaption.textContent = `${image.name || "evidence"} · ${formatBytes(image.size || 0)} · ${image.source || "image"}`;
+  setImageZoom(1);
   elements.imageModal.showModal();
 }
 
 function closeImageModal() {
   elements.imageModal.close();
+  activeImage = null;
   elements.modalImage.removeAttribute("src");
   elements.modalCaption.textContent = "";
+  setImageZoom(1);
+}
+
+function setImageZoom(nextZoom) {
+  imageZoom = Math.min(4, Math.max(0.25, nextZoom));
+  elements.modalImage.style.width = `${imageZoom * 100}%`;
+  elements.zoomResetImage.textContent = `${Math.round(imageZoom * 100)}%`;
+}
+
+function downloadImage(image) {
+  const link = document.createElement("a");
+  link.href = image.url;
+  link.download = image.name || "evidence-image.jpg";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 async function deleteEvidenceImage(caseId, index) {

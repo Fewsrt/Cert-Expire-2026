@@ -285,8 +285,18 @@
 
     <dialog id="image-modal" class="image-modal">
       <div class="image-modal-content">
-        <button id="close-image-modal" type="button" class="secondary">ปิด</button>
-        <img id="modal-image" alt="evidence preview">
+        <div class="modal-toolbar">
+          <div class="row-actions">
+            <button id="zoom-out-image" type="button" class="secondary">-</button>
+            <button id="zoom-reset-image" type="button" class="secondary">100%</button>
+            <button id="zoom-in-image" type="button" class="secondary">+</button>
+            <button id="download-image" type="button">Download</button>
+          </div>
+          <button id="close-image-modal" type="button" class="secondary">ปิด</button>
+        </div>
+        <div class="modal-image-frame">
+          <img id="modal-image" alt="evidence preview">
+        </div>
         <p id="modal-caption"></p>
       </div>
     </dialog>
