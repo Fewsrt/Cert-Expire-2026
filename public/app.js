@@ -1,6 +1,7 @@
 const STORAGE_KEY = "vm-ca2023-results";
 const CONFIG_KEY = "vm-ca2023-firebase-config";
 const COLLECTION_NAME = "vmCa2023Results";
+const EVIDENCE_PATH = "vmCa2023Evidence";
 
 const statusLabels = {
   pending: "ยังไม่เริ่ม",
@@ -254,6 +255,7 @@ let activeFilter = "all";
 let activeView = "tests";
 let searchTerm = "";
 let firebaseApi = null;
+let storageApi = null;
 let unsubscribe = null;
 let results = loadLocalResults();
 
@@ -389,12 +391,14 @@ function renderCase(testCase) {
   fillList(fragment.querySelector(".steps"), testCase.steps);
   fillList(fragment.querySelector(".expected"), testCase.expected);
   fillList(fragment.querySelector(".remediation"), testCase.remediation);
+  fillCommands(fragment.querySelector(".commands"), getCommands(testCase));
 
   const form = fragment.querySelector(".result-form");
   Object.entries(result).forEach(([key, value]) => {
     const field = form.elements[key];
-    if (field) field.value = value || "";
+    if (field && field.type !== "file") field.value = value || "";
   });
+  renderEvidenceGallery(fragment.querySelector(".evidence-gallery"), result.evidenceImages || []);
 
   fragment.querySelector(".updated-at").textContent = result.updatedAt
     ? `บันทึกล่าสุด: ${formatDate(result.updatedAt)}`
@@ -403,6 +407,9 @@ function renderCase(testCase) {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const formData = new FormData(form);
+    const files = Array.from(form.elements.evidenceImages.files || []);
+    const uploadedImages = await uploadEvidenceImages(testCase.id, files);
+    const existingImages = result.evidenceImages || [];
     const nextResult = {
       caseId: testCase.id,
       caseTitle: testCase.title,
@@ -420,6 +427,7 @@ function renderCase(testCase) {
       rootCause: formData.get("rootCause") || "",
       actualRemediation: formData.get("actualRemediation") || "",
       notes: formData.get("notes") || "",
+      evidenceImages: [...existingImages, ...uploadedImages],
       updatedAt: new Date().toISOString()
     };
 
@@ -438,6 +446,40 @@ function fillList(container, items) {
     const li = document.createElement("li");
     li.textContent = item;
     container.appendChild(li);
+  });
+}
+
+function fillCommands(container, commands) {
+  container.innerHTML = "";
+  commands.forEach((item) => {
+    const box = document.createElement("div");
+    box.className = "command-box";
+    box.innerHTML = `
+      <strong>${escapeHtml(item.label)}</strong>
+      <pre><code>${escapeHtml(item.code)}</code></pre>
+    `;
+    container.appendChild(box);
+  });
+}
+
+function renderEvidenceGallery(container, images) {
+  container.innerHTML = "";
+  if (!images.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "ยังไม่มีรูป evidence";
+    container.appendChild(empty);
+    return;
+  }
+
+  images.forEach((image) => {
+    const link = document.createElement("a");
+    link.href = image.url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.title = image.name || "evidence";
+    link.innerHTML = `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || "evidence image")}">`;
+    container.appendChild(link);
   });
 }
 
@@ -601,20 +643,108 @@ async function connectFirebase() {
 
   try {
     setSync("กำลังเชื่อม Firebase");
-    const [{ initializeApp }, { getFirestore, collection, doc, onSnapshot, setDoc, serverTimestamp }] = await Promise.all([
+    const [{ initializeApp }, { getFirestore, collection, doc, onSnapshot, setDoc, serverTimestamp }, { getStorage, ref, uploadBytes, getDownloadURL }] = await Promise.all([
       import("https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js"),
-      import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js")
+      import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js"),
+      import("https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js")
     ]);
 
-    const app = initializeApp(config);
+    const app = initializeApp(normalizeFirebaseConfig(config));
     const db = getFirestore(app);
+    const storage = getStorage(app);
 
     firebaseApi = { db, collection, doc, onSnapshot, setDoc, serverTimestamp };
+    storageApi = { storage, ref, uploadBytes, getDownloadURL };
     subscribeToResults();
   } catch (error) {
     console.error(error);
     setSync(`เชื่อม Firebase ไม่สำเร็จ, ใช้ local fallback: ${error.message}`);
   }
+}
+
+async function uploadEvidenceImages(caseId, files) {
+  if (!files.length) return [];
+  if (!storageApi) {
+    return filesToInlineEvidence(files, "Firebase Storage ยังไม่พร้อม ใช้ Firestore inline fallback");
+  }
+
+  const uploaded = [];
+  for (const file of files) {
+    if (!file.type.startsWith("image/")) {
+      alert(`ข้ามไฟล์ ${file.name}: รองรับเฉพาะรูปภาพ`);
+      continue;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      alert(`ข้ามไฟล์ ${file.name}: ไฟล์ใหญ่กว่า 10 MB`);
+      continue;
+    }
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = `${EVIDENCE_PATH}/${caseId}/${Date.now()}-${safeName}`;
+    try {
+      const fileRef = storageApi.ref(storageApi.storage, path);
+      await storageApi.uploadBytes(fileRef, file, {
+        contentType: file.type,
+        customMetadata: { caseId }
+      });
+      const url = await storageApi.getDownloadURL(fileRef);
+      uploaded.push({
+        name: file.name,
+        path,
+        url,
+        contentType: file.type,
+        size: file.size,
+        source: "firebase-storage",
+        uploadedAt: new Date().toISOString()
+      });
+    } catch (error) {
+      console.warn("Storage upload failed; using Firestore inline fallback.", error);
+      const fallback = await fileToInlineEvidence(file, "Storage upload failed");
+      if (fallback) uploaded.push(fallback);
+    }
+  }
+  return uploaded;
+}
+
+async function filesToInlineEvidence(files, reason) {
+  const uploaded = [];
+  for (const file of files) {
+    const fallback = await fileToInlineEvidence(file, reason);
+    if (fallback) uploaded.push(fallback);
+  }
+  return uploaded;
+}
+
+function fileToInlineEvidence(file, reason) {
+  return new Promise((resolve) => {
+    if (!file.type.startsWith("image/")) {
+      alert(`ข้ามไฟล์ ${file.name}: รองรับเฉพาะรูปภาพ`);
+      resolve(null);
+      return;
+    }
+    if (file.size > 700 * 1024) {
+      alert(`ข้ามไฟล์ ${file.name}: no-billing fallback รองรับรูปไม่เกิน 700 KB ต่อไฟล์`);
+      resolve(null);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve({
+        name: file.name,
+        path: "",
+        url: reader.result,
+        contentType: file.type,
+        size: file.size,
+        source: "firestore-inline",
+        note: reason,
+        uploadedAt: new Date().toISOString()
+      });
+    };
+    reader.onerror = () => {
+      alert(`อ่านไฟล์ ${file.name} ไม่สำเร็จ`);
+      resolve(null);
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function subscribeToResults() {
@@ -668,6 +798,14 @@ function getFirebaseConfig() {
   }
 }
 
+function normalizeFirebaseConfig(config) {
+  if (!config?.projectId) return config;
+  return {
+    storageBucket: `${config.projectId}.firebasestorage.app`,
+    ...config
+  };
+}
+
 function defaultResult() {
   return {
     status: "pending",
@@ -683,8 +821,85 @@ function defaultResult() {
     rootCause: "",
     actualRemediation: "",
     notes: "",
+    evidenceImages: [],
     updatedAt: ""
   };
+}
+
+function getCommands(testCase) {
+  const windowsCheck = {
+    label: "Windows check CA / KEK / events",
+    code: `Confirm-SecureBootUEFI
+
+[System.Text.Encoding]::ASCII.GetString((Get-SecureBootUEFI db).Bytes) -match 'Windows UEFI CA 2023'
+[System.Text.Encoding]::ASCII.GetString((Get-SecureBootUEFI KEK).Bytes) -match 'Microsoft Corporation KEK 2K CA 2023'
+
+Get-ItemProperty -Path HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot -Name AvailableUpdates -ErrorAction SilentlyContinue
+Get-ItemProperty -Path HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\Servicing -ErrorAction SilentlyContinue
+
+Get-WinEvent -FilterHashtable @{LogName='System'; Id=1795,1796,1801,1808} -MaxEvents 20 |
+  Select-Object TimeCreated, Id, ProviderName, Message`
+  };
+
+  const windowsTrigger = {
+    label: "Windows trigger Secure Boot update",
+    code: `reg add HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot /v MicrosoftUpdateManagedOptIn /t REG_DWORD /d 1 /f
+Start-ScheduledTask -TaskName "\\Microsoft\\Windows\\PI\\Secure-Boot-Update"`
+  };
+
+  const bitLocker = {
+    label: "BitLocker check / suspend",
+    code: `manage-bde -status
+manage-bde -protectors -get C:
+Suspend-BitLocker -MountPoint C: -RebootCount 2`
+  };
+
+  const pkCheck = {
+    label: "Windows PK check",
+    code: `$pk = Get-SecureBootUEFI -Name PK
+$bytes = $pk.Bytes
+$cert = $bytes[44..($bytes.Length-1)]
+[IO.File]::WriteAllBytes("PK.der", $cert)
+certutil -dump PK.der`
+  };
+
+  const linuxRhel = {
+    label: "RHEL-family Secure Boot check",
+    code: `mokutil --sb-state
+mokutil --pk
+mokutil --kek
+mokutil --db
+mokutil --dbx
+rpm -q shim grub2-efi-x64 grub2-tools kernel`
+  };
+
+  const linuxUbuntu = {
+    label: "Ubuntu Secure Boot check",
+    code: `mokutil --sb-state
+mokutil --pk
+mokutil --kek
+mokutil --db
+mokutil --dbx
+dpkg -l shim-signed shim grub-efi-amd64-signed grub2-common linux-image-generic`
+  };
+
+  const esxiNvram = {
+    label: "ESXi NVRAM remediation reference",
+    code: `# Power off VM first
+# Datastore browser or ESXi shell:
+mv vmname.nvram vmname.nvram_old
+
+# Power on VM to regenerate NVRAM
+# Then rerun Windows CA/KEK checks`
+  };
+
+  if (testCase.os.includes("Ubuntu")) return [linuxUbuntu];
+  if (testCase.os.includes("RHEL") || testCase.os.includes("Rocky") || testCase.os.includes("Oracle")) return [linuxRhel];
+  if (testCase.id === "1.2") return [{ label: "Windows Secure Boot state", code: "Confirm-SecureBootUEFI" }];
+  if (testCase.id === "1.3") return [windowsCheck, pkCheck];
+  if (testCase.id === "2.2") return [windowsCheck, windowsTrigger, esxiNvram];
+  if (testCase.id === "4.2") return [bitLocker, windowsCheck, windowsTrigger];
+  return [windowsCheck, windowsTrigger];
 }
 
 function loadLocalResults() {

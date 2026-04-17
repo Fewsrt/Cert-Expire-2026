@@ -361,6 +361,33 @@ h1 {
   line-height: 1.45;
 }
 
+.command-box {
+  margin: 10px 0;
+}
+
+.command-box strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.command-box pre {
+  margin: 0;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #161a18;
+  color: #f4f7f5;
+  padding: 12px;
+  line-height: 1.45;
+}
+
+.command-box code {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
 .result-form {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -387,6 +414,27 @@ h1 {
 
 .updated-at {
   color: var(--muted);
+}
+
+.evidence-gallery {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.evidence-gallery a {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-soft);
+}
+
+.evidence-gallery img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
 }
 
 .summary-view {
@@ -603,6 +651,7 @@ h1 {
   .status-strip,
   .focus-grid,
   .result-form,
+  .evidence-gallery,
   .summary-hero,
   .slide-grid,
   .summary-columns,
@@ -627,6 +676,7 @@ h1 {
   .status-strip,
   .focus-grid,
   .result-form,
+  .evidence-gallery,
   .case-heading,
   .summary-hero,
   .slide-grid,

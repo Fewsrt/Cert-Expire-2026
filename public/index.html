@@ -166,7 +166,11 @@
         <div class="case-meta"></div>
         <div class="case-details">
           <details>
-            <summary>Steps / Expected / Remediation</summary>
+            <summary>Commands / Steps / Expected / Remediation</summary>
+            <div class="detail-block">
+              <h3>Commands</h3>
+              <div class="commands"></div>
+            </div>
             <div class="detail-block">
               <h3>Steps</h3>
               <ol class="steps"></ol>
@@ -265,6 +269,11 @@
             Evidence / note
             <textarea name="notes" rows="3" placeholder="ผล command, link evidence, screenshot path"></textarea>
           </label>
+          <label class="wide">
+            แนบรูป evidence
+            <input name="evidenceImages" type="file" accept="image/*" multiple>
+          </label>
+          <div class="wide evidence-gallery"></div>
           <div class="form-footer">
             <small class="updated-at">ยังไม่บันทึก</small>
             <button type="submit">บันทึกผล</button>

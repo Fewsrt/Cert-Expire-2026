@@ -6,6 +6,7 @@
 
 - Firebase Hosting สำหรับหน้าเว็บ
 - Cloud Firestore สำหรับเก็บผล test
+- Cloud Storage for Firebase สำหรับเก็บรูป evidence ถ้า project มี Storage bucket
 - Firestore rules สำหรับควบคุมการอ่าน/เขียน collection ผล test
 - ไม่ใช้ Firebase Authentication เพื่อให้ใช้งานได้บน Spark/no billing
 
@@ -119,3 +120,16 @@ Field สำคัญ:
 ตอนนี้ตั้งใจเปิดให้ใครก็ได้ที่มี URL อ่าน/เขียนข้อมูล test ได้ โดยไม่ต้องเปิด Billing หรือ Authentication
 
 ถ้าต้องการจำกัดให้เฉพาะทีมจริงในอนาคต ควรเปลี่ยนเป็น Google/Microsoft SSO หรือ Anonymous Auth แล้วปรับ rules ให้ตรวจ `request.auth`, email/domain หรือ custom claims
+
+## 6. Image evidence storage
+
+เว็บมีช่องแนบรูปในแต่ละ test case
+
+- ถ้า Firebase Storage bucket พร้อมใช้งาน รูปจะ upload ไปที่ path:
+  ```text
+  vmCa2023Evidence/<test-id>/<timestamp>-<filename>
+  ```
+- ถ้า Firebase Storage ยังไม่ได้ set up หรือ project ยังเป็น no-billing ที่สร้าง bucket ไม่ได้ เว็บจะ fallback ไปเก็บรูปขนาดเล็กเป็น inline data ใน Firestore
+- โหมด fallback จำกัดรูปไม่เกิน 700 KB ต่อไฟล์ เพื่อเลี่ยง Firestore document size limit
+
+หมายเหตุ: Firebase Storage default bucket สำหรับ project ใหม่หลัง October 30, 2024 ต้องใช้ Blaze/pay-as-you-go ในการ provision bucket ตาม Firebase policy ปัจจุบัน
