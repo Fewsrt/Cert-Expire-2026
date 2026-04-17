@@ -1,1 +1,3 @@
-window.FIREBASE_CONFIG = null;
+window.FIREBASE_CONFIG = {
+  projectId: "cert-expire-2026-ca"
+};

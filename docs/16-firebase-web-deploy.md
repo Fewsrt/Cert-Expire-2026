@@ -31,12 +31,7 @@ public/firebase-config.js
 
 ```js
 window.FIREBASE_CONFIG = {
-  apiKey: "xxxx",
-  authDomain: "your-project.firebaseapp.com",
-  projectId: "your-project",
-  storageBucket: "your-project.firebasestorage.app",
-  messagingSenderId: "xxxx",
-  appId: "xxxx"
+  projectId: "your-project"
 };
 ```
 
