@@ -126,3 +126,36 @@ rpm -q shim grub2
 - Linux: Secure Boot enabled + boot-chain current จาก supported repo + reboot >= 2 รอบแล้วเสถียร
 - VMware: ไม่เกิด UEFI/NVRAM persistence drift หลัง reboot
 - เอกสาร: มี evidence ครบ และ final CSV พร้อม sign-off
+
+## UAT matrix (scenario-based) - Firmware / OS / ESXi combinations
+> ใช้ตารางนี้เป็น execution sheet ได้เลย โดยกรอก Owner, วันที่, ผลทดสอบ และหลักฐานต่อแถว
+
+| Test Case ID | Scenario | OS | Environment | Priority | Owner | Test Data/Setup | Expected Result | Pass/Fail | Evidence Link | Remark |
+|---|---|---|---|---|---|---|---|---|---|---|
+| UAT-PHY-01 | Physical firmware old + OS old | Windows | BareMetal | High |  | เครื่อง physical ที่ BIOS/UEFI เก่า + Windows รุ่นเก่าใน scope | ผ่านได้เฉพาะเมื่ออัปเดตครบ; ถ้าไม่ผ่านต้องเข้า remediation |  |  |  |
+| UAT-PHY-02 | Physical firmware old + OS old | Linux | BareMetal | High |  | เครื่อง physical firmware เก่า + Linux boot-chain เก่า | มีโอกาสบูตล้มเหลวเมื่อ SBAT/dbx เข้มขึ้น; ต้องมี recovery path |  |  |  |
+| UAT-PHY-03 | Physical firmware new + OS old | Windows | BareMetal | High |  | firmware ใหม่ + Windows เก่า | ดีกว่าเคส firmware เก่า แต่ยังเสี่ยงที่ OS path ไม่ครบ |  |  |  |
+| UAT-PHY-04 | Physical firmware new + OS old | Linux | BareMetal | High |  | firmware ใหม่ + Linux เก่า | ต้องยืนยัน shim/grub current จาก repo ที่ support |  |  |  |
+| UAT-PHY-05 | Physical firmware old + OS new | Windows | BareMetal | High |  | firmware เก่า + Windows ใหม่ | อาจติดที่ firmware behavior; ต้อง verify หลัง reboot >= 2 รอบ |  |  |  |
+| UAT-PHY-06 | Physical firmware old + OS new | Linux | BareMetal | High |  | firmware เก่า + Linux ใหม่ | บูตต้องเสถียรและ Secure Boot enabled |  |  |  |
+| UAT-PHY-07 | Physical firmware new + OS new | Windows | BareMetal | Critical |  | firmware ใหม่ + Windows 11/Server ใหม่ | Golden path ควรผ่านครบและเสถียร |  |  |  |
+| UAT-PHY-08 | Physical firmware new + OS new | Linux | BareMetal | Critical |  | firmware ใหม่ + Linux supported ล่าสุด | Golden path ควรผ่านครบและเสถียร |  |  |  |
+| UAT-VM-01 | VM on ESXi 7 | Windows | VMwareVM | Critical |  | VM EFI + Secure Boot บน ESXi 7 | ผ่านได้แต่ต้องจับตา NVRAM persistence สูงเป็นพิเศษ |  |  |  |
+| UAT-VM-02 | VM on ESXi 7 | Linux | VMwareVM | High |  | Linux VM บน ESXi 7 | ต้องบูตผ่าน + verify boot chain + reboot stability |  |  |  |
+| UAT-VM-03 | VM on ESXi 8 | Windows | VMwareVM | Critical |  | Windows VM บน ESXi 8 | ควรเสถียรกว่า ESXi 7 แต่ยังต้อง verify ซ้ำ |  |  |  |
+| UAT-VM-04 | VM on ESXi 8 | Linux | VMwareVM | High |  | Linux VM บน ESXi 8 | ผ่านเมื่อ Secure Boot และ boot chain เป็น current state |  |  |  |
+| UAT-VM-05 | VM created on ESXi 7 then host upgraded to ESXi 8 | Windows | VMwareVM | Critical |  | VM เดิม (legacy) ย้าย/อัป host มา ESXi 8 | ต้องตรวจ legacy NVRAM pattern และ verify หลายรอบ |  |  |  |
+| UAT-VM-06 | VM created on ESXi 7 then host upgraded to ESXi 8 | Linux | VMwareVM | High |  | Linux VM เดิมจาก ESXi 7 | บูตต้องคงที่หลัง host upgrade และ reboot cycle |  |  |  |
+| UAT-NVRAM-01 | NVRAM persistence test (warm/cold reboot) | Windows | VMwareVM | Critical |  | อัปเดตเสร็จแล้วทดสอบ reboot หลายแบบ | ค่า CA/status ไม่หายหลัง reboot/cold boot |  |  |  |
+| UAT-NVRAM-02 | NVRAM persistence test (warm/cold reboot) | Linux | VMwareVM | High |  | Linux VM หลังอัปเดต boot chain | ค่า Secure Boot state คงที่ทุก reboot |  |  |  |
+| UAT-SNP-01 | Revert snapshot -> check NVRAM rolled back to old CA | Windows | VMwareVM | Critical |  | สร้าง snapshot ก่อน rollout แล้ว revert | ต้องตรวจพบ drift และจัดสถานะให้ถูกต้อง |  |  |  |
+| UAT-SNP-02 | Revert snapshot -> check NVRAM rolled back to old CA | Linux | VMwareVM | High |  | Linux snapshot/revert flow | ตรวจพบการย้อน state ได้และระบุผลตรงจริง |  |  |  |
+| UAT-SEC-01 | Disable Secure Boot intentionally | Windows | BareMetal/VMwareVM | Critical |  | ปิด Secure Boot ชั่วคราวแล้ว validate | ต้องถูกจัด `NON_COMPLIANT` ทันที |  |  |  |
+| UAT-SEC-02 | Disable Secure Boot intentionally | Linux | BareMetal/VMwareVM | Critical |  | ปิด Secure Boot แล้วทดสอบ | ต้องถูกจัด `NON_COMPLIANT` ทันที |  |  |  |
+| UAT-TPL-01 | Create template on ESXi 8.0.3 then deploy on ESXi 7 | Windows | VMwareVM | High |  | Template สร้างบน 8.0.3 แล้ว deploy ลง host 7 | ต้องผ่าน compatibility + verify CA2023 + reboot stability |  |  |  |
+| UAT-TPL-02 | Create template on ESXi 8.0.3 then deploy on ESXi 7 | Linux | VMwareVM | High |  | Linux template จาก 8.0.3 ไป ESXi 7 | ต้องบูตผ่านและ Secure Boot state คงที่ |  |  |  |
+
+### Execution notes for matrix
+- ทุกเคสต้องมีอย่างน้อย: baseline ก่อนทำ, ผลหลังทำ, และผลหลัง reboot >= 2 รอบ
+- ถ้าเป็น VMware VM ให้เก็บข้อมูล ESXi build, VM compatibility level, snapshot state, datastore status ทุกครั้ง
+- ถ้าเคสล้มเหลว ให้ map เข้า remediation path ที่ระบุใน runbook และ re-test ด้วย Test Case ID เดิม
