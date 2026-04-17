@@ -7,7 +7,9 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev:web": "npx http-server public -p 5173",
+    "deploy:web": "npx firebase-tools deploy",
+    "test": "node --check public/app.js",
     "present:html": "node tools/gen-html-present.js"
   },
   "repository": {

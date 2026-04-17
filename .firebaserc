@@ -1,0 +1,5 @@
+{
+  "projects": {
+    "default": "cert-expire-2026-ca"
+  }
+}

@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VM CA 2023 Tracker</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./firebase-config.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Secure Boot CA 2023</p>
+          <h1>VM Test Tracker</h1>
+          <p class="lead">ติดตามผลทดสอบ CA, KEK, db, dbx ตามคู่ Guest OS + ESXi และบันทึกสถานะลง Firestore</p>
+        </div>
+        <img class="topbar-image" src="https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=640&q=80" alt="server monitoring dashboard">
+      </header>
+
+      <section class="status-strip" aria-label="summary">
+        <div class="metric">
+          <span id="metric-total">0</span>
+          <small>ทั้งหมด</small>
+        </div>
+        <div class="metric pass">
+          <span id="metric-pass">0</span>
+          <small>ผ่าน</small>
+        </div>
+        <div class="metric fail">
+          <span id="metric-fail">0</span>
+          <small>ไม่ผ่าน</small>
+        </div>
+        <div class="metric impact">
+          <span id="metric-impact">0</span>
+          <small>Impact</small>
+        </div>
+        <div class="sync-state" id="sync-state">กำลังเริ่มต้น</div>
+      </section>
+
+      <section class="setup-panel" id="setup-panel">
+        <details>
+          <summary>Firebase setup</summary>
+          <p>ถ้า deploy จริง ให้สร้างไฟล์ <code>public/firebase-config.js</code> จาก <code>public/firebase-config.sample.js</code> หรือวาง JSON config ด้านล่างเพื่อทดสอบใน browser นี้</p>
+          <textarea id="firebase-config-input" spellcheck="false" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","appId":"..."}'></textarea>
+          <div class="row-actions">
+            <button id="save-config" type="button">บันทึก config</button>
+            <button id="clear-config" type="button" class="secondary">ล้าง config</button>
+          </div>
+        </details>
+      </section>
+
+      <nav class="filters" aria-label="filters">
+        <button class="filter active" data-filter="all" type="button">ทั้งหมด</button>
+        <button class="filter" data-filter="pending" type="button">ยังไม่เริ่ม</button>
+        <button class="filter" data-filter="in-progress" type="button">กำลังทดสอบ</button>
+        <button class="filter" data-filter="pass" type="button">ผ่าน</button>
+        <button class="filter" data-filter="fail" type="button">ไม่ผ่าน</button>
+        <button class="filter" data-filter="exception" type="button">Exception</button>
+      </nav>
+
+      <section class="toolbar">
+        <label class="search-box">
+          <span>ค้นหา</span>
+          <input id="search-input" type="search" placeholder="เช่น Windows Server 2022, ESXi 7, KEK">
+        </label>
+        <div class="row-actions">
+          <button id="export-json" type="button" class="secondary">Export JSON</button>
+          <button id="reset-local" type="button" class="secondary">Reset local</button>
+        </div>
+      </section>
+
+      <section class="focus-grid" aria-label="focus">
+        <article>
+          <strong>CA</strong>
+          <span>ตรวจว่า <code>Windows UEFI CA 2023</code> เข้า <code>db</code> แล้ว</span>
+        </article>
+        <article>
+          <strong>KEK</strong>
+          <span>ตรวจว่า <code>Microsoft Corporation KEK 2K CA 2023</code> เข้า <code>KEK</code> แล้ว</span>
+        </article>
+        <article>
+          <strong>DB</strong>
+          <span>allow list update ได้และ persist หลัง reboot</span>
+        </article>
+        <article>
+          <strong>DBX</strong>
+          <span>revocation update path ไม่มี event failure วนซ้ำ</span>
+        </article>
+      </section>
+
+      <section id="case-list" class="case-list" aria-live="polite"></section>
+    </main>
+
+    <template id="case-template">
+      <article class="case-card">
+        <div class="case-heading">
+          <div>
+            <p class="case-id"></p>
+            <h2></h2>
+            <p class="purpose"></p>
+          </div>
+          <span class="badge"></span>
+        </div>
+
+        <div class="case-meta"></div>
+        <div class="case-details">
+          <details>
+            <summary>Steps / Expected / Remediation</summary>
+            <div class="detail-block">
+              <h3>Steps</h3>
+              <ol class="steps"></ol>
+            </div>
+            <div class="detail-block">
+              <h3>Expected</h3>
+              <ul class="expected"></ul>
+            </div>
+            <div class="detail-block">
+              <h3>ถ้า fail / วิธีแก้</h3>
+              <ul class="remediation"></ul>
+            </div>
+          </details>
+        </div>
+
+        <form class="result-form">
+          <label>
+            สถานะ
+            <select name="status">
+              <option value="pending">ยังไม่เริ่ม</option>
+              <option value="in-progress">กำลังทดสอบ</option>
+              <option value="pass">ผ่าน</option>
+              <option value="fail">ไม่ผ่าน</option>
+              <option value="exception">Exception</option>
+            </select>
+          </label>
+          <label>
+            VM name
+            <input name="vmName" type="text" placeholder="เช่น LAB-WS2022-ESX8">
+          </label>
+          <label>
+            ESXi build
+            <input name="esxiBuild" type="text" placeholder="เช่น 8.0.3 build ...">
+          </label>
+          <label>
+            Owner
+            <input name="owner" type="text" placeholder="คนรับผิดชอบ">
+          </label>
+          <label>
+            Before CA 2023
+            <select name="beforeCa">
+              <option value="">ยังไม่ตรวจ</option>
+              <option value="true">True</option>
+              <option value="false">False</option>
+              <option value="na">N/A</option>
+            </select>
+          </label>
+          <label>
+            Before KEK 2023
+            <select name="beforeKek">
+              <option value="">ยังไม่ตรวจ</option>
+              <option value="true">True</option>
+              <option value="false">False</option>
+              <option value="na">N/A</option>
+            </select>
+          </label>
+          <label>
+            After CA 2023
+            <select name="afterCa">
+              <option value="">ยังไม่ตรวจ</option>
+              <option value="true">True</option>
+              <option value="false">False</option>
+              <option value="na">N/A</option>
+            </select>
+          </label>
+          <label>
+            After KEK 2023
+            <select name="afterKek">
+              <option value="">ยังไม่ตรวจ</option>
+              <option value="true">True</option>
+              <option value="false">False</option>
+              <option value="na">N/A</option>
+            </select>
+          </label>
+          <label>
+            Event IDs
+            <input name="events" type="text" placeholder="เช่น 1808 หรือ 1795,1796">
+          </label>
+          <label>
+            Impact
+            <select name="impact">
+              <option value="">ยังไม่สรุป</option>
+              <option value="no">No</option>
+              <option value="yes">Yes</option>
+            </select>
+          </label>
+          <label class="wide">
+            Root cause
+            <input name="rootCause" type="text" placeholder="เช่น missing KEK, PK invalid, NVRAM persistence">
+          </label>
+          <label class="wide">
+            Remediation ที่ใช้จริง
+            <textarea name="actualRemediation" rows="3" placeholder="ใส่วิธีแก้ที่ทำจริง"></textarea>
+          </label>
+          <label class="wide">
+            Evidence / note
+            <textarea name="notes" rows="3" placeholder="ผล command, link evidence, screenshot path"></textarea>
+          </label>
+          <div class="form-footer">
+            <small class="updated-at">ยังไม่บันทึก</small>
+            <button type="submit">บันทึกผล</button>
+          </div>
+        </form>
+      </article>
+    </template>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
