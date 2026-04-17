@@ -36,6 +36,16 @@ window.FIREBASE_CONFIG = {
 };
 ```
 
+ถ้ามี Firebase Storage bucket แล้วและต้องการให้รูป upload เข้า Storage แทน Firestore inline fallback ให้เพิ่ม:
+
+```js
+window.FIREBASE_CONFIG = {
+  projectId: "your-project",
+  enableStorage: true,
+  storageBucket: "your-project.firebasestorage.app"
+};
+```
+
 หมายเหตุ:
 
 - Firebase web config ไม่ใช่ secret แต่เป็น project-specific config
@@ -129,6 +139,7 @@ Field สำคัญ:
   ```text
   vmCa2023Evidence/<test-id>/<timestamp>-<filename>
   ```
+- เว็บจะเรียก Firebase Storage เฉพาะเมื่อ config มี `enableStorage: true` และ `storageBucket` เท่านั้น
 - ถ้า Firebase Storage ยังไม่ได้ set up หรือ project ยังเป็น no-billing ที่สร้าง bucket ไม่ได้ เว็บจะ fallback ไปเก็บรูปขนาดเล็กเป็น inline data ใน Firestore
 - โหมด fallback จำกัดรูปไม่เกิน 700 KB ต่อไฟล์ เพื่อเลี่ยง Firestore document size limit
 

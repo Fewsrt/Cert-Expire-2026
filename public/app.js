@@ -643,22 +643,34 @@ async function connectFirebase() {
 
   try {
     setSync("กำลังเชื่อม Firebase");
-    const [{ initializeApp }, { getFirestore, collection, doc, onSnapshot, setDoc, serverTimestamp }, { getStorage, ref, uploadBytes, getDownloadURL }] = await Promise.all([
+    const [{ initializeApp }, { getFirestore, collection, doc, onSnapshot, setDoc, serverTimestamp }] = await Promise.all([
       import("https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js"),
-      import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js"),
-      import("https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js")
+      import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js")
     ]);
 
-    const app = initializeApp(normalizeFirebaseConfig(config));
+    const app = initializeApp(config);
     const db = getFirestore(app);
-    const storage = getStorage(app);
 
     firebaseApi = { db, collection, doc, onSnapshot, setDoc, serverTimestamp };
-    storageApi = { storage, ref, uploadBytes, getDownloadURL };
+    await connectStorageIfEnabled(app, config);
     subscribeToResults();
   } catch (error) {
     console.error(error);
     setSync(`เชื่อม Firebase ไม่สำเร็จ, ใช้ local fallback: ${error.message}`);
+  }
+}
+
+async function connectStorageIfEnabled(app, config) {
+  storageApi = null;
+  if (!config.enableStorage || !config.storageBucket) return;
+
+  try {
+    const { getStorage, ref, uploadBytes, getDownloadURL } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js");
+    const storage = getStorage(app, `gs://${config.storageBucket}`);
+    storageApi = { storage, ref, uploadBytes, getDownloadURL };
+  } catch (error) {
+    console.warn("Firebase Storage is disabled; using Firestore inline image fallback.", error);
+    storageApi = null;
   }
 }
 
@@ -796,14 +808,6 @@ function getFirebaseConfig() {
   } catch {
     return null;
   }
-}
-
-function normalizeFirebaseConfig(config) {
-  if (!config?.projectId) return config;
-  return {
-    storageBucket: `${config.projectId}.firebasestorage.app`,
-    ...config
-  };
 }
 
 function defaultResult() {
