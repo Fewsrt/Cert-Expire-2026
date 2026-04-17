@@ -937,7 +937,7 @@ function subscribeToResults() {
 
   const ref = firebaseApi.collection(firebaseApi.db, COLLECTION_NAME);
   unsubscribe = firebaseApi.onSnapshot(ref, (snapshot) => {
-    const next = { ...results };
+    const next = {};
     snapshot.forEach((item) => {
       next[item.id] = normalizeRemoteResult(item.data());
     });
