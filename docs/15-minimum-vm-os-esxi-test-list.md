@@ -595,7 +595,232 @@ Expected:
 
 ---
 
-## 11. สรุปผลที่ควรเขียนหลังทดสอบ
+## 11. ถ้าเจอ impact ต้องแก้ยังไง
+
+ใช้ section นี้เป็น remediation map หลังจาก run test แล้วเจอ fail/impact
+
+### 11.1 เจอว่า `CA 2023` ยังไม่เข้า `db`
+
+อาการ:
+
+- command นี้ได้ `False`
+  ```powershell
+  [System.Text.Encoding]::ASCII.GetString((Get-SecureBootUEFI db).Bytes) -match 'Windows UEFI CA 2023'
+  ```
+- event อาจเจอ `1801`, `1795`
+
+วิธีแก้:
+
+1. ตรวจว่า VM เป็น `EFI + Secure Boot ON`
+2. patch Windows ให้ล่าสุด
+3. opt-in และ trigger task ใหม่:
+   ```powershell
+   reg add HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot /v MicrosoftUpdateManagedOptIn /t REG_DWORD /d 1 /f
+   Start-ScheduledTask -TaskName "\Microsoft\Windows\PI\Secure-Boot-Update"
+   ```
+4. reboot 2 รอบ
+5. check `db` ซ้ำ
+
+ถ้ายัง fail:
+
+- ตรวจ `KEK 2023`
+- ตรวจ `PK`
+- ตรวจว่าเป็น VM ที่สร้างจาก ESXi เก่ากว่า 8.0.2 หรือไม่
+
+### 11.2 เจอว่า `KEK 2023` ยังไม่เข้า `KEK`
+
+อาการ:
+
+- command นี้ได้ `False`
+  ```powershell
+  [System.Text.Encoding]::ASCII.GetString((Get-SecureBootUEFI KEK).Bytes) -match 'Microsoft Corporation KEK 2K CA 2023'
+  ```
+- event อาจเจอ `1796`
+- future update ของ `db` / `dbx` อาจ fail
+
+วิธีแก้:
+
+1. patch Windows ให้ล่าสุด
+2. trigger Secure Boot update task
+3. reboot 2 รอบ
+4. ถ้ายังไม่มา ให้สงสัย `.nvram` เก่า หรือ `PK` invalid
+
+ถ้า VM ถูกสร้างบน ESXi ต่ำกว่า 8.0.2 หรือ migrate มาจาก ESXi 7:
+
+1. shutdown VM
+2. take snapshot หรือ backup VM
+3. upgrade VM compatibility เป็น latest supported
+4. rename ไฟล์ `.nvram` ใน datastore เช่น:
+   ```text
+   vmname.nvram -> vmname.nvram_old
+   ```
+5. power on VM เพื่อให้ ESXi generate `.nvram` ใหม่
+6. check `KEK` และ `db` ซ้ำ
+
+ข้อควรระวัง:
+
+- ถ้ามี vTPM + BitLocker/LUKS ต้องเก็บ recovery key ก่อน
+- ห้ามทำกับ production โดยไม่มี snapshot/rollback
+
+### 11.3 เจอ event `1795`
+
+อาการ:
+
+- Windows event log มี `1795`
+- Secure Boot database update ไม่สำเร็จ
+- อาจเป็น firmware/virtual firmware return error
+
+วิธีแก้:
+
+1. patch ESXi เป็น latest build ของ major version นั้น
+2. patch Windows ให้ล่าสุด
+3. ตรวจ datastore ว่า write ได้ปกติและไม่มี snapshot chain ผิดปกติ
+4. ตรวจว่า VM compatibility เก่ามากหรือไม่
+5. ถ้าอยู่บน ESXi 7 ให้ลอง migrate ไป ESXi 8.0.2+ แล้ว retest
+6. ตรวจ `PK` ว่า valid หรือไม่
+
+ถ้ายัง fail:
+
+- ทำ remediation ตาม `11.5 PK invalid`
+
+### 11.4 เจอ event `1796`
+
+อาการ:
+
+- Windows event log มี `1796`
+- มักเกี่ยวกับ KEK update failure
+- `KEK 2023` ยังไม่เข้า
+
+วิธีแก้:
+
+1. check `KEK`
+2. check `PK`
+3. ถ้า VM มาจาก ESXi เก่า ให้ regenerate `.nvram`
+4. ถ้า `PK` invalid ให้ manual update PK
+
+### 11.5 เจอ `PK` invalid หรือ null
+
+อาการ:
+
+- `certutil -dump PK.der` อ่าน certificate ไม่ได้
+- script check PK fail
+- `mokutil --pk` บน Linux ไม่เจอ PK หรือ output ผิดปกติ
+- Secure Boot database update fail แม้ Windows patched แล้ว
+
+วิธีแก้แบบ high-level:
+
+1. shutdown VM
+2. take snapshot
+3. ถ้ามี BitLocker/LUKS ให้เก็บ recovery key
+4. เตรียม FAT32 disk ที่มี `WindowsOEMDevicesPK.der`
+5. เพิ่ม VM advanced parameter:
+   ```text
+   uefi.allowAuthBypass = "TRUE"
+   ```
+6. Force EFI Setup
+7. enroll PK จาก `WindowsOEMDevicesPK.der`
+8. remove `uefi.allowAuthBypass`
+9. detach disk
+10. boot เข้า OS แล้ว trigger Secure Boot update ใหม่
+
+ข้อควรระวัง:
+
+- ขั้นตอนนี้ควรทำตาม Broadcom KB 423919 แบบละเอียด
+- ต้องมี rollback เพราะถ้าทำผิดอาจ boot ไม่ขึ้นหรือถาม recovery key
+
+### 11.6 เจอว่า update แล้วค่าหายหลัง reboot
+
+อาการ:
+
+- ก่อน reboot check ได้ `CA 2023 = True` หรือ `KEK 2023 = True`
+- หลัง reboot กลับเป็น `False`
+- หรือ event 1801/1795/1796 วนซ้ำ
+
+สาเหตุที่เป็นไปได้:
+
+- ESXi 7 NVRAM persistence issue
+- datastore/snapshot chain มีปัญหา
+- `.nvram` เก่า
+- VM compatibility เก่า
+
+วิธีแก้:
+
+1. patch ESXi
+2. ตรวจ datastore free space/permission/snapshot
+3. upgrade VM compatibility
+4. regenerate `.nvram`
+5. ถ้าอยู่บน ESXi 7 ให้ migrate ไป ESXi 8.0.2+ แล้ว retest
+
+### 11.7 เจอ BitLocker recovery prompt หลังแก้ Secure Boot key
+
+อาการ:
+
+- หลังเปลี่ยน Secure Boot key หรือ regenerate `.nvram` แล้ว Windows ถาม BitLocker recovery key
+
+วิธีแก้:
+
+1. ใส่ BitLocker recovery key
+2. boot เข้า Windows
+3. ตรวจ BitLocker:
+   ```powershell
+   manage-bde -status
+   manage-bde -protectors -get C:
+   ```
+4. ถ้าจะ retry change ให้ suspend BitLocker ก่อน:
+   ```powershell
+   Suspend-BitLocker -MountPoint C: -RebootCount 2
+   ```
+
+ข้อควรระวัง:
+
+- production VM ที่มี vTPM + BitLocker ต้องเตรียม recovery key ก่อนทุกครั้ง
+
+### 11.8 Linux boot fail หลัง Secure Boot/dbx update
+
+อาการ:
+
+- Linux VM boot ไม่ขึ้นเมื่อ Secure Boot ON
+- ติด Secure Boot verification
+- shim/GRUB/kernel เก่า
+
+วิธีแก้:
+
+1. ปิด Secure Boot ชั่วคราวใน VM settings
+2. boot เข้า Linux
+3. update boot chain:
+   ```bash
+   # RHEL-family
+   sudo dnf update shim grub2-efi-x64 grub2-tools kernel
+
+   # Ubuntu/Debian
+   sudo apt update
+   sudo apt install --only-upgrade shim-signed grub-efi-amd64-signed grub2-common linux-image-generic
+   ```
+4. reboot
+5. เปิด Secure Boot กลับ
+6. verify:
+   ```bash
+   mokutil --sb-state
+   ```
+
+### 11.9 Unsupported OS
+
+อาการ:
+
+- Windows Server 2012/2012 R2 ไม่มี ESU
+- Windows 10 ไม่มี supported servicing/ESU
+- Linux distro หมด support หรือใช้ boot package เก่า/pinned
+
+วิธีแก้:
+
+- upgrade OS
+- migrate workload ไป supported OS
+- ถ้ายังย้ายไม่ได้ ให้ทำ exception พร้อม risk acceptance
+- ถ้าจำเป็นจริง ให้ปิด Secure Boot เป็น temporary exception เฉพาะ VM นั้น และต้องมี compensating control
+
+---
+
+## 12. สรุปผลที่ควรเขียนหลังทดสอบ
 
 ใช้ format นี้ทุก test:
 
