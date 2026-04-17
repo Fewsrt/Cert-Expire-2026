@@ -10,6 +10,25 @@
 
 ---
 
+## Focus หลักของ test ชุดนี้
+
+ทุก test ในไฟล์นี้ให้ focus ที่ 4 อย่างนี้ก่อน:
+
+| Focus | วิธีคิด | คำสั่งตรวจหลัก |
+|---|---|---|
+| CA | มี `Windows UEFI CA 2023` ใน `db` แล้วหรือยัง | `Get-SecureBootUEFI db` |
+| KEK | มี `Microsoft Corporation KEK 2K CA 2023` ใน `KEK` แล้วหรือยัง | `Get-SecureBootUEFI KEK` |
+| DB | Secure Boot allow list update ได้และ persist หลัง reboot หรือไม่ | `Get-SecureBootUEFI db` |
+| DBX | Secure Boot revocation list update path ยังทำงานได้หรือไม่ | event `1795`, `1796`, `1801`, `1808` และ servicing status |
+
+ผลทดสอบที่ถือว่าใช้ได้ต้องตอบได้ 3 ข้อ:
+
+1. `CA 2023` เข้า `db` แล้วหรือยัง
+2. `KEK 2023` เข้า `KEK` แล้วหรือยัง
+3. ค่าใน `db` / `KEK` / `dbx` update ได้และไม่หายหลัง reboot หรือไม่
+
+---
+
 ## คำสั่งกลางที่ใช้ทุก Windows test
 
 Run PowerShell as Administrator ใน Windows VM

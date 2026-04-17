@@ -6,6 +6,21 @@ Scope ของไฟล์นี้คือ VM บน VMware ESXi เท่า
 
 ---
 
+## Focus ของการทดสอบนี้
+
+การทดสอบนี้ไม่ได้ focus แค่คำว่า "CA 2023" อย่างเดียว แต่ focus ที่ Secure Boot variables หลัก 4 ตัวนี้:
+
+| ตัวที่ focus | อยู่ที่ไหน | ต้องตรวจอะไร | ถ้าผิดปกติจะกระทบอะไร |
+|---|---|---|---|
+| CA | อยู่ใน `db` | มี `Windows UEFI CA 2023` หรือยัง | Windows boot manager รุ่นใหม่อาจไม่ถูก trust |
+| KEK | อยู่ใน `KEK` | มี `Microsoft Corporation KEK 2K CA 2023` หรือยัง | update `db` / `dbx` ต่อไม่ได้ หรือ future revocation update fail |
+| DB | UEFI variable `db` | allow list มี certificate ใหม่ครบไหม | bootloader/EFI app ที่ควรถูก trust อาจ boot ไม่ผ่าน |
+| DBX | UEFI variable `dbx` | revocation list update ได้ไหม | revoke bootloader/cert ที่ไม่ปลอดภัยไม่ได้ หรือ update fail |
+
+ดังนั้น pass/fail ของ lab ต้องไม่ดูแค่ว่า VM boot ได้ แต่ต้องดูว่า `CA`, `KEK`, `db`, และ `dbx` อยู่ใน state ที่ update ได้และ persist หลัง reboot
+
+---
+
 ## 1) สิ่งที่ต้องเข้าใจก่อนเริ่ม
 
 ### 1.1 Certificate ที่เกี่ยวข้อง
