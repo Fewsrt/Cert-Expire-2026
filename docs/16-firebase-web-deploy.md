@@ -7,6 +7,7 @@
 - Firebase Hosting สำหรับหน้าเว็บ
 - Cloud Firestore สำหรับเก็บผล test
 - Firestore rules สำหรับควบคุมการอ่าน/เขียน collection ผล test
+- ไม่ใช้ Firebase Authentication เพื่อให้ใช้งานได้บน Spark/no billing
 
 ---
 
@@ -120,4 +121,6 @@ Field สำคัญ:
 
 `firestore.rules` ตอนนี้อนุญาต read/write เฉพาะ collection `vmCa2023Results` เพื่อให้เว็บใช้งานได้ทันทีโดยไม่ต้องตั้ง Auth provider ก่อน
 
-ถ้าต้องการจำกัดให้เฉพาะทีมจริง ควรเปลี่ยนเป็น Google/Microsoft SSO หรือ Anonymous Auth แล้วปรับ rules ให้ตรวจ `request.auth`, email/domain หรือ custom claims ก่อนใช้งาน production
+ตอนนี้ตั้งใจเปิดให้ใครก็ได้ที่มี URL อ่าน/เขียนข้อมูล test ได้ โดยไม่ต้องเปิด Billing หรือ Authentication
+
+ถ้าต้องการจำกัดให้เฉพาะทีมจริงในอนาคต ควรเปลี่ยนเป็น Google/Microsoft SSO หรือ Anonymous Auth แล้วปรับ rules ให้ตรวจ `request.auth`, email/domain หรือ custom claims

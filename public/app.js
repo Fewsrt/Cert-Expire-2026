@@ -456,19 +456,12 @@ async function connectFirebase() {
 
   try {
     setSync("กำลังเชื่อม Firebase");
-    const [{ initializeApp }, { getAuth, signInAnonymously }, { getFirestore, collection, doc, onSnapshot, setDoc, serverTimestamp }] = await Promise.all([
+    const [{ initializeApp }, { getFirestore, collection, doc, onSnapshot, setDoc, serverTimestamp }] = await Promise.all([
       import("https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js"),
-      import("https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js"),
       import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js")
     ]);
 
     const app = initializeApp(config);
-    const auth = getAuth(app);
-    try {
-      await signInAnonymously(auth);
-    } catch (error) {
-      console.warn("Anonymous auth is not enabled; continuing with Firestore rules only.", error);
-    }
     const db = getFirestore(app);
 
     firebaseApi = { db, collection, doc, onSnapshot, setDoc, serverTimestamp };
