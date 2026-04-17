@@ -18,6 +18,11 @@
         <img class="topbar-image" src="https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=640&q=80" alt="server monitoring dashboard">
       </header>
 
+      <nav class="app-nav" aria-label="main views">
+        <button class="nav-tab active" data-view="tests" type="button">Test Cases</button>
+        <button class="nav-tab" data-view="summary" type="button">Summary</button>
+      </nav>
+
       <section class="status-strip" aria-label="summary">
         <div class="metric">
           <span id="metric-total">0</span>
@@ -50,46 +55,101 @@
         </details>
       </section>
 
-      <nav class="filters" aria-label="filters">
-        <button class="filter active" data-filter="all" type="button">ทั้งหมด</button>
-        <button class="filter" data-filter="pending" type="button">ยังไม่เริ่ม</button>
-        <button class="filter" data-filter="in-progress" type="button">กำลังทดสอบ</button>
-        <button class="filter" data-filter="pass" type="button">ผ่าน</button>
-        <button class="filter" data-filter="fail" type="button">ไม่ผ่าน</button>
-        <button class="filter" data-filter="exception" type="button">Exception</button>
-      </nav>
+      <section id="tests-view" class="view active-view">
+        <nav class="filters" aria-label="filters">
+          <button class="filter active" data-filter="all" type="button">ทั้งหมด</button>
+          <button class="filter" data-filter="pending" type="button">ยังไม่เริ่ม</button>
+          <button class="filter" data-filter="in-progress" type="button">กำลังทดสอบ</button>
+          <button class="filter" data-filter="pass" type="button">ผ่าน</button>
+          <button class="filter" data-filter="fail" type="button">ไม่ผ่าน</button>
+          <button class="filter" data-filter="exception" type="button">Exception</button>
+        </nav>
 
-      <section class="toolbar">
-        <label class="search-box">
-          <span>ค้นหา</span>
-          <input id="search-input" type="search" placeholder="เช่น Windows Server 2022, ESXi 7, KEK">
-        </label>
-        <div class="row-actions">
-          <button id="export-json" type="button" class="secondary">Export JSON</button>
-          <button id="reset-local" type="button" class="secondary">Reset local</button>
-        </div>
+        <section class="toolbar">
+          <label class="search-box">
+            <span>ค้นหา</span>
+            <input id="search-input" type="search" placeholder="เช่น Windows Server 2022, ESXi 7, KEK">
+          </label>
+          <div class="row-actions">
+            <button id="export-json" type="button" class="secondary">Export JSON</button>
+            <button id="reset-local" type="button" class="secondary">Reset local</button>
+          </div>
+        </section>
+
+        <section class="focus-grid" aria-label="focus">
+          <article>
+            <strong>CA</strong>
+            <span>ตรวจว่า <code>Windows UEFI CA 2023</code> เข้า <code>db</code> แล้ว</span>
+          </article>
+          <article>
+            <strong>KEK</strong>
+            <span>ตรวจว่า <code>Microsoft Corporation KEK 2K CA 2023</code> เข้า <code>KEK</code> แล้ว</span>
+          </article>
+          <article>
+            <strong>DB</strong>
+            <span>allow list update ได้และ persist หลัง reboot</span>
+          </article>
+          <article>
+            <strong>DBX</strong>
+            <span>revocation update path ไม่มี event failure วนซ้ำ</span>
+          </article>
+        </section>
+
+        <section id="case-list" class="case-list" aria-live="polite"></section>
       </section>
 
-      <section class="focus-grid" aria-label="focus">
-        <article>
-          <strong>CA</strong>
-          <span>ตรวจว่า <code>Windows UEFI CA 2023</code> เข้า <code>db</code> แล้ว</span>
-        </article>
-        <article>
-          <strong>KEK</strong>
-          <span>ตรวจว่า <code>Microsoft Corporation KEK 2K CA 2023</code> เข้า <code>KEK</code> แล้ว</span>
-        </article>
-        <article>
-          <strong>DB</strong>
-          <span>allow list update ได้และ persist หลัง reboot</span>
-        </article>
-        <article>
-          <strong>DBX</strong>
-          <span>revocation update path ไม่มี event failure วนซ้ำ</span>
-        </article>
-      </section>
+      <section id="summary-view" class="view summary-view" aria-live="polite">
+        <section class="summary-hero">
+          <div>
+            <p class="eyebrow">Executive Summary</p>
+            <h2>CA 2023 VM Readiness</h2>
+            <p id="summary-headline">ยังไม่มีผลทดสอบที่บันทึก</p>
+          </div>
+          <div class="summary-score">
+            <span id="summary-percent">0%</span>
+            <small>completion</small>
+          </div>
+        </section>
 
-      <section id="case-list" class="case-list" aria-live="polite"></section>
+        <section class="slide-grid">
+          <article class="slide-card">
+            <p class="slide-label">Coverage</p>
+            <strong id="summary-coverage">0 / 0</strong>
+            <span>test cases มีผลลัพธ์แล้ว</span>
+          </article>
+          <article class="slide-card pass">
+            <p class="slide-label">Pass</p>
+            <strong id="summary-pass">0</strong>
+            <span>ผ่านตาม CA/KEK/db/dbx criteria</span>
+          </article>
+          <article class="slide-card fail">
+            <p class="slide-label">Fail</p>
+            <strong id="summary-fail">0</strong>
+            <span>ต้อง remediation หรือ retest</span>
+          </article>
+          <article class="slide-card impact">
+            <p class="slide-label">Impact</p>
+            <strong id="summary-impact">0</strong>
+            <span>สรุปว่าโดนผลกระทบ</span>
+          </article>
+        </section>
+
+        <section class="summary-columns">
+          <article class="summary-panel">
+            <h3>Progress by Platform</h3>
+            <div id="platform-summary" class="platform-summary"></div>
+          </article>
+          <article class="summary-panel">
+            <h3>Key Findings</h3>
+            <ul id="key-findings" class="finding-list"></ul>
+          </article>
+        </section>
+
+        <section class="summary-band">
+          <h3>Result Cards</h3>
+          <div id="summary-case-cards" class="summary-case-cards"></div>
+        </section>
+      </section>
     </main>
 
     <template id="case-template">

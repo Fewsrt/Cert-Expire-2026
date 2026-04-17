@@ -251,12 +251,15 @@ const cases = [
 ];
 
 let activeFilter = "all";
+let activeView = "tests";
 let searchTerm = "";
 let firebaseApi = null;
 let unsubscribe = null;
 let results = loadLocalResults();
 
 const elements = {
+  testsView: document.querySelector("#tests-view"),
+  summaryView: document.querySelector("#summary-view"),
   list: document.querySelector("#case-list"),
   template: document.querySelector("#case-template"),
   total: document.querySelector("#metric-total"),
@@ -270,7 +273,16 @@ const elements = {
   clearConfig: document.querySelector("#clear-config"),
   search: document.querySelector("#search-input"),
   exportJson: document.querySelector("#export-json"),
-  resetLocal: document.querySelector("#reset-local")
+  resetLocal: document.querySelector("#reset-local"),
+  summaryHeadline: document.querySelector("#summary-headline"),
+  summaryPercent: document.querySelector("#summary-percent"),
+  summaryCoverage: document.querySelector("#summary-coverage"),
+  summaryPass: document.querySelector("#summary-pass"),
+  summaryFail: document.querySelector("#summary-fail"),
+  summaryImpact: document.querySelector("#summary-impact"),
+  platformSummary: document.querySelector("#platform-summary"),
+  keyFindings: document.querySelector("#key-findings"),
+  summaryCaseCards: document.querySelector("#summary-case-cards")
 };
 
 init();
@@ -282,6 +294,15 @@ function init() {
 }
 
 function wireEvents() {
+  document.querySelectorAll(".nav-tab").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll(".nav-tab").forEach((item) => item.classList.remove("active"));
+      button.classList.add("active");
+      activeView = button.dataset.view;
+      switchView();
+    });
+  });
+
   document.querySelectorAll(".filter").forEach((button) => {
     button.addEventListener("click", () => {
       document.querySelectorAll(".filter").forEach((item) => item.classList.remove("active"));
@@ -335,6 +356,8 @@ function render() {
   elements.list.innerHTML = "";
   visibleCases.forEach((testCase) => elements.list.appendChild(renderCase(testCase)));
   renderMetrics();
+  renderSummary();
+  switchView();
 }
 
 function renderCase(testCase) {
@@ -439,11 +462,133 @@ function filterCases() {
 }
 
 function renderMetrics() {
-  const allResults = cases.map((testCase) => results[testCase.id] || defaultResult());
+  const allResults = getAllResults();
   elements.total.textContent = cases.length;
   elements.pass.textContent = allResults.filter((item) => item.status === "pass").length;
   elements.fail.textContent = allResults.filter((item) => item.status === "fail").length;
   elements.impact.textContent = allResults.filter((item) => item.impact === "yes").length;
+}
+
+function renderSummary() {
+  const allResults = getAllResults();
+  const completed = allResults.filter((item) => item.status !== "pending").length;
+  const pass = allResults.filter((item) => item.status === "pass").length;
+  const fail = allResults.filter((item) => item.status === "fail").length;
+  const impact = allResults.filter((item) => item.impact === "yes").length;
+  const percent = cases.length ? Math.round((completed / cases.length) * 100) : 0;
+
+  elements.summaryPercent.textContent = `${percent}%`;
+  elements.summaryCoverage.textContent = `${completed} / ${cases.length}`;
+  elements.summaryPass.textContent = pass;
+  elements.summaryFail.textContent = fail;
+  elements.summaryImpact.textContent = impact;
+  elements.summaryHeadline.textContent = buildSummaryHeadline(completed, pass, fail, impact);
+
+  renderPlatformSummary();
+  renderKeyFindings({ completed, pass, fail, impact });
+  renderSummaryCards();
+}
+
+function buildSummaryHeadline(completed, pass, fail, impact) {
+  if (!completed) return "ยังไม่มีผลทดสอบที่บันทึก เริ่มจากชุด minimum test ก่อนเพื่อเห็น risk เร็วที่สุด";
+  if (fail || impact) return `บันทึกผลแล้ว ${completed} test case พบ fail ${fail} รายการ และ impact ${impact} รายการที่ต้องติดตาม remediation`;
+  return `บันทึกผลแล้ว ${completed} test case ยังไม่พบ impact จากชุดที่ทดสอบ`;
+}
+
+function renderPlatformSummary() {
+  const groups = new Map();
+  cases.forEach((testCase) => {
+    const result = results[testCase.id] || defaultResult();
+    const key = testCase.section;
+    const item = groups.get(key) || { total: 0, done: 0, pass: 0, fail: 0, impact: 0 };
+    item.total += 1;
+    if (result.status !== "pending") item.done += 1;
+    if (result.status === "pass") item.pass += 1;
+    if (result.status === "fail") item.fail += 1;
+    if (result.impact === "yes") item.impact += 1;
+    groups.set(key, item);
+  });
+
+  elements.platformSummary.innerHTML = "";
+  groups.forEach((item, name) => {
+    const percent = item.total ? Math.round((item.done / item.total) * 100) : 0;
+    const row = document.createElement("div");
+    row.className = "platform-row";
+    row.innerHTML = `
+      <span class="platform-name">${escapeHtml(name)}</span>
+      <span>${item.done}/${item.total} done · ${item.pass} pass · ${item.fail} fail · ${item.impact} impact</span>
+      <div class="platform-bar"><span style="width: ${percent}%"></span></div>
+    `;
+    elements.platformSummary.appendChild(row);
+  });
+}
+
+function renderKeyFindings(summary) {
+  const findings = [];
+  if (!summary.completed) {
+    findings.push("ยังไม่มี result ที่บันทึกในระบบ");
+    findings.push("เริ่มจาก Windows Server 2022 บน ESXi 8.0 และ ESXi 7.0 เพื่อเทียบ baseline กับ risk");
+  } else {
+    findings.push(`ความคืบหน้ารวม ${summary.completed}/${cases.length} test cases`);
+    findings.push(`ผ่านแล้ว ${summary.pass} test cases`);
+    if (summary.fail) findings.push(`มี fail ${summary.fail} test cases ต้องทำ remediation และ retest`);
+    if (summary.impact) findings.push(`มี impact ${summary.impact} test cases ต้องติดตาม owner/root cause`);
+    if (!summary.fail && !summary.impact) findings.push("ยังไม่พบ impact จากผลที่บันทึกไว้");
+  }
+
+  const pendingCritical = ["3.1", "3.2", "4.1", "4.2"].filter((id) => (results[id] || defaultResult()).status === "pending");
+  if (pendingCritical.length) findings.push(`minimum critical tests ที่ยัง pending: ${pendingCritical.join(", ")}`);
+
+  elements.keyFindings.innerHTML = "";
+  findings.forEach((finding) => {
+    const li = document.createElement("li");
+    li.textContent = finding;
+    elements.keyFindings.appendChild(li);
+  });
+}
+
+function renderSummaryCards() {
+  const orderedCases = [...cases].sort((a, b) => {
+    const aResult = results[a.id] || defaultResult();
+    const bResult = results[b.id] || defaultResult();
+    return statusWeight(aResult) - statusWeight(bResult);
+  });
+
+  elements.summaryCaseCards.innerHTML = "";
+  orderedCases.forEach((testCase) => {
+    const result = results[testCase.id] || defaultResult();
+    const card = document.createElement("article");
+    card.className = "summary-mini-card";
+    const badgeClass = result.impact === "yes" ? "impact" : result.status;
+    card.innerHTML = `
+      <p class="case-id">Test ${escapeHtml(testCase.id)} · ${escapeHtml(testCase.section)}</p>
+      <span class="badge ${escapeHtml(badgeClass || "pending")}">${escapeHtml(statusLabels[result.status] || statusLabels.pending)}</span>
+      <h4>${escapeHtml(testCase.title)}</h4>
+      <p>Impact: ${escapeHtml(result.impact || "ยังไม่สรุป")}</p>
+      <p>VM: ${escapeHtml(result.vmName || "-")}</p>
+      <p>Root cause: ${escapeHtml(result.rootCause || "-")}</p>
+      <p>Updated: ${escapeHtml(result.updatedAt ? formatDate(result.updatedAt) : "-")}</p>
+    `;
+    elements.summaryCaseCards.appendChild(card);
+  });
+}
+
+function statusWeight(result) {
+  if (result.impact === "yes") return 0;
+  if (result.status === "fail") return 1;
+  if (result.status === "in-progress") return 2;
+  if (result.status === "exception") return 3;
+  if (result.status === "pending") return 4;
+  return 5;
+}
+
+function getAllResults() {
+  return cases.map((testCase) => results[testCase.id] || defaultResult());
+}
+
+function switchView() {
+  elements.testsView.classList.toggle("active-view", activeView === "tests");
+  elements.summaryView.classList.toggle("active-view", activeView === "summary");
 }
 
 async function connectFirebase() {
@@ -566,4 +711,13 @@ function formatDate(value) {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(date);
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
