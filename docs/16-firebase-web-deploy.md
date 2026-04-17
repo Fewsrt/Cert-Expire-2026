@@ -5,7 +5,7 @@
 เว็บนี้ใช้:
 
 - Firebase Hosting สำหรับหน้าเว็บ
-- Cloud Firestore สำหรับเก็บผล test
+- Cloud Firestore สำหรับเก็บ test case และผล test
 - Cloud Storage for Firebase สำหรับเก็บรูป evidence ถ้า project มี Storage bucket
 - Firestore rules สำหรับควบคุมการอ่าน/เขียน collection ผล test
 - ไม่ใช้ Firebase Authentication เพื่อให้ใช้งานได้บน Spark/no billing
@@ -90,7 +90,41 @@ https://cert-expire-2026-ca.web.app
 
 ## 4. Firestore collection
 
-เว็บจะเก็บข้อมูลไว้ที่ collection:
+เว็บจะเก็บ test case ไว้ที่ collection:
+
+```text
+vmCa2023Cases
+```
+
+Document ID จะตรงกับ test ID เช่น:
+
+```text
+1.1
+3.2
+4.2
+```
+
+Field สำคัญ:
+
+| Field | ความหมาย |
+|---|---|
+| `id` | test ID |
+| `section` | กลุ่ม test เช่น OS + ESXi version |
+| `title` | ชื่อ test |
+| `order` | ลำดับแสดงผล |
+| `purpose` | เป้าหมาย test |
+| `os` | OS ที่ใช้ทดสอบ |
+| `esxi` | ESXi version/build target |
+| `firmware` | BIOS/EFI |
+| `secureBoot` | สถานะ Secure Boot |
+| `vtpm` | สถานะ vTPM |
+| `encryption` | Encryption/BitLocker |
+| `steps` | ขั้นตอนทดสอบ เป็น array |
+| `expected` | expected result เป็น array |
+| `remediation` | วิธีแก้ เป็น array |
+| `commands` | command box เป็น array ของ `{ label, code }` |
+
+เว็บจะเก็บผล test ไว้ที่ collection:
 
 ```text
 vmCa2023Results
@@ -125,7 +159,7 @@ Field สำคัญ:
 
 ## 5. Security note
 
-`firestore.rules` ตอนนี้อนุญาต read/write เฉพาะ collection `vmCa2023Results` เพื่อให้เว็บใช้งานได้ทันทีโดยไม่ต้องตั้ง Auth provider ก่อน
+`firestore.rules` ตอนนี้อนุญาต read/write/delete collection `vmCa2023Cases` และ `vmCa2023Results` เพื่อให้เว็บใช้งานได้ทันทีโดยไม่ต้องตั้ง Auth provider ก่อน
 
 ตอนนี้ตั้งใจเปิดให้ใครก็ได้ที่มี URL อ่าน/เขียนข้อมูล test ได้ โดยไม่ต้องเปิด Billing หรือ Authentication
 

@@ -205,6 +205,46 @@ h1 {
   padding: 14px 16px;
 }
 
+.case-admin {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.case-admin summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.case-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.case-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.case-form input,
+.case-form textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  padding: 10px;
+}
+
+.case-form .wide {
+  grid-column: span 2;
+}
+
 .setup-panel summary {
   cursor: pointer;
   font-weight: 700;
@@ -285,6 +325,13 @@ h1 {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: start;
+}
+
+.case-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .case-id {
@@ -746,6 +793,7 @@ h1 {
   .status-strip,
   .focus-grid,
   .result-form,
+  .case-form,
   .evidence-gallery,
   .summary-hero,
   .slide-grid,
@@ -771,6 +819,7 @@ h1 {
   .status-strip,
   .focus-grid,
   .result-form,
+  .case-form,
   .evidence-gallery,
   .case-heading,
   .summary-hero,
@@ -787,5 +836,9 @@ h1 {
   .form-footer {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .case-form .wide {
+    grid-column: auto;
   }
 }

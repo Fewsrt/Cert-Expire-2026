@@ -11,245 +11,12 @@ const statusLabels = {
   exception: "Exception"
 };
 
-const cases = [
-  {
-    id: "1.1",
-    section: "Windows Server 2019 บน ESXi 7.0",
-    title: "Baseline EFI + Secure Boot ON",
-    purpose: "ดูว่า Windows Server 2019 บน ESXi 7.0 update CA 2023 ได้และค่า persist หลัง reboot หรือไม่",
-    os: "Windows Server 2019",
-    esxi: "ESXi 7.0",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "OFF",
-    encryption: "OFF",
-    steps: [
-      "ติดตั้ง Windows Server 2019",
-      "Windows Update ให้ล่าสุด",
-      "Install VMware Tools",
-      "run check ก่อนเริ่ม",
-      "trigger Secure Boot update",
-      "reboot 2 รอบ",
-      "run check ซ้ำหลัง reboot แต่ละรอบ"
-    ],
-    expected: [
-      "Confirm-SecureBootUEFI = True",
-      "Windows UEFI CA 2023 = True",
-      "Microsoft Corporation KEK 2K CA 2023 = True",
-      "ค่าไม่หายหลัง reboot รอบที่ 2"
-    ],
-    remediation: [
-      "ถ้า CA/KEK หายหลัง reboot ให้สงสัย ESXi 7 / NVRAM persistence",
-      "patch ESXi 7 ให้ล่าสุด",
-      "ตรวจ datastore/snapshot chain",
-      "ถ้ายัง fail ให้ migrate ไป ESXi 8.0.2+ แล้ว retest"
-    ]
-  },
-  {
-    id: "1.2",
-    section: "Windows Server 2019 บน ESXi 7.0",
-    title: "EFI + Secure Boot OFF",
-    purpose: "ยืนยันว่า VM ที่ปิด Secure Boot จะไม่โดน enforcement โดยตรง แต่เป็น compliance exception",
-    os: "Windows Server 2019",
-    esxi: "ESXi 7.0",
-    firmware: "EFI",
-    secureBoot: "OFF",
-    vtpm: "N/A",
-    encryption: "N/A",
-    steps: ["boot VM", "run Confirm-SecureBootUEFI", "บันทึกผล"],
-    expected: [
-      "command จะ return False หรือไม่สามารถ confirm Secure Boot ได้",
-      "VM ไม่อยู่ในกลุ่มที่ Windows Secure Boot CA 2023 rollout มีผลโดยตรง"
-    ],
-    remediation: [
-      "ถ้า policy ต้องเปิด Secure Boot ให้เปิด Secure Boot แล้วกลับไปทำ test 1.1",
-      "ถ้าเปิดไม่ได้ ให้บันทึกเป็น exception"
-    ]
-  },
-  {
-    id: "1.3",
-    section: "Windows Server 2019 บน ESXi 7.0",
-    title: "Invalid PK / Missing KEK check",
-    purpose: "ตรวจว่า VM มีปัญหา PK invalid หรือ KEK 2023 missing หรือไม่",
-    os: "Windows Server 2019",
-    esxi: "ESXi 7.0",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "Optional",
-    encryption: "Optional",
-    steps: ["check KEK 2023", "export และ dump PK.der ด้วย certutil"],
-    expected: ["KEK 2023 ควรเป็น True", "certutil -dump PK.der ต้องอ่าน certificate ได้ปกติ"],
-    remediation: [
-      "ถ้า KEK 2023 missing และ VM เกิดจาก ESXi เก่า ให้ regenerate .nvram",
-      "ถ้า PK invalid ให้ทำ manual PK update ตาม Broadcom KB 423919"
-    ]
-  },
-  {
-    id: "2.1",
-    section: "Windows Server 2019 บน ESXi 8.0",
-    title: "Baseline EFI + Secure Boot ON",
-    purpose: "ใช้เป็น baseline ว่า Windows Server 2019 บน ESXi 8.0 update ได้ปกติหรือไม่",
-    os: "Windows Server 2019",
-    esxi: "ESXi 8.0.2+",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "OFF",
-    encryption: "OFF",
-    steps: ["ติดตั้ง Windows Server 2019", "patch OS ให้ล่าสุด", "install VMware Tools", "run check ก่อนเริ่ม", "trigger Secure Boot update", "reboot 2 รอบ", "run check ซ้ำ"],
-    expected: ["CA 2023 และ KEK 2023 เป็น True", "ไม่มี event 1801/1795/1796 วนซ้ำ"],
-    remediation: ["ตรวจว่า VM ถูกสร้างบน ESXi ก่อน 8.0.2 หรือไม่", "ตรวจ .nvram", "ตรวจ PK invalid"]
-  },
-  {
-    id: "2.2",
-    section: "Windows Server 2019 บน ESXi 8.0",
-    title: "VM เก่าที่ย้ายมาจาก ESXi 7.0",
-    purpose: "จำลอง production VM ที่สร้างบน ESXi 7 แล้ว migrate มา ESXi 8",
-    os: "Windows Server 2019",
-    esxi: "ESXi 8.0.2+",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "Optional",
-    encryption: "Optional",
-    steps: ["power on VM บน ESXi 8.0.2+", "check KEK 2023", "trigger update", "reboot 2 รอบ", "check CA/KEK ซ้ำ"],
-    expected: ["ถ้า VM ไม่มี legacy NVRAM issue ต้องผ่านเหมือน test 2.1"],
-    remediation: ["power off VM", "upgrade VM compatibility เป็น latest supported", "rename .nvram เป็น backup", "power on ให้ ESXi generate NVRAM ใหม่", "check KEK/CA ใหม่"]
-  },
-  {
-    id: "3.1",
-    section: "Windows Server 2022 บน ESXi 7.0",
-    title: "Baseline EFI + Secure Boot ON",
-    purpose: "ทดสอบกลุ่มเสี่ยงสำคัญ เพราะ Windows Server 2022 + Secure Boot เคยมีประเด็นกับ ESXi 7.x",
-    os: "Windows Server 2022",
-    esxi: "ESXi 7.0",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "OFF",
-    encryption: "OFF",
-    steps: ["ติดตั้ง Windows Server 2022", "patch OS ให้ล่าสุด", "install VMware Tools", "run check ก่อนเริ่ม", "trigger Secure Boot update", "reboot 2 รอบ", "check CA/KEK/Event log"],
-    expected: ["CA 2023 และ KEK 2023 เป็น True", "VM boot ได้ทุก reboot", "ค่า persist หลัง reboot"],
-    remediation: ["ถ้า boot เข้า UEFI Boot Manager หรือ boot ไม่ขึ้น ให้ capture screenshot", "ถ้า event 1801/1795/1796 วนซ้ำ ให้ตรวจ PK/KEK/NVRAM", "ถ้าเป็น production pattern ให้พิจารณา migrate ไป ESXi 8.0.2+"]
-  },
-  {
-    id: "3.2",
-    section: "Windows Server 2022 บน ESXi 7.0",
-    title: "Reboot persistence test",
-    purpose: "ทดสอบเฉพาะว่า UEFI variable บน ESXi 7 หายหลัง reboot หรือไม่",
-    os: "Windows Server 2022",
-    esxi: "ESXi 7.0",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "OFF",
-    encryption: "OFF",
-    steps: ["หลัง test 3.1 ผ่าน ให้จดผล CA/KEK", "reboot VM รอบที่ 1 แล้ว check", "reboot VM รอบที่ 2 แล้ว check", "power off VM แล้ว power on ใหม่ แล้ว check"],
-    expected: ["CA/KEK 2023 ยังเป็น True ทุกครั้ง"],
-    remediation: ["จัดว่า impacted จาก NVRAM persistence", "patch ESXi 7", "ตรวจ datastore", "migrate ไป ESXi 8 แล้ว retest"]
-  },
-  {
-    id: "4.1",
-    section: "Windows Server 2022 บน ESXi 8.0",
-    title: "Baseline EFI + Secure Boot ON",
-    purpose: "ใช้เป็น baseline หลักสำหรับ Windows Server รุ่นใหม่",
-    os: "Windows Server 2022",
-    esxi: "ESXi 8.0.2+",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "OFF",
-    encryption: "OFF",
-    steps: ["ติดตั้ง Windows Server 2022", "patch OS ให้ล่าสุด", "install VMware Tools", "run check ก่อนเริ่ม", "trigger Secure Boot update", "reboot 2 รอบ", "check CA/KEK/Event log"],
-    expected: ["CA 2023 และ KEK 2023 เป็น True", "ไม่มี event failure วนซ้ำ", "VM boot ได้ปกติ"],
-    remediation: ["ตรวจว่า VM สร้างก่อน ESXi 8.0.2 หรือไม่", "ตรวจ PK invalid", "regenerate .nvram ถ้า KEK 2023 missing"]
-  },
-  {
-    id: "4.2",
-    section: "Windows Server 2022 บน ESXi 8.0",
-    title: "vTPM + BitLocker",
-    purpose: "ทดสอบ risk ตอน Secure Boot key เปลี่ยนกับ VM ที่ encrypt disk",
-    os: "Windows Server 2022",
-    esxi: "ESXi 8.0.2+",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "ON",
-    encryption: "BitLocker",
-    steps: ["ตรวจ BitLocker ด้วย manage-bde", "Suspend-BitLocker -MountPoint C: -RebootCount 2", "trigger Secure Boot update", "reboot 2 รอบ", "check CA/KEK", "ตรวจว่า BitLocker กลับมาปกติ"],
-    expected: ["VM boot ได้", "ไม่ถาม recovery key หรือถ้าถามต้อง recover ได้", "CA/KEK 2023 เป็น True"],
-    remediation: ["ใช้ recovery key", "restore snapshot ถ้า boot ไม่ได้", "ทำ change control ใหม่ก่อน retry"]
-  },
-  {
-    id: "5.1",
-    section: "Windows Server 2025 บน ESXi 8.0",
-    title: "New OS baseline",
-    purpose: "ใช้ยืนยันว่า OS รุ่นใหม่ไม่มีปัญหาใน ESXi 8 baseline",
-    os: "Windows Server 2025",
-    esxi: "ESXi 8.0.2+",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "OFF",
-    encryption: "OFF",
-    steps: ["ติดตั้ง Windows Server 2025", "patch OS ให้ล่าสุด", "install VMware Tools", "run check ก่อนเริ่ม", "trigger Secure Boot update", "reboot 2 รอบ", "check CA/KEK/Event log"],
-    expected: ["CA 2023 และ KEK 2023 เป็น True", "VM boot ได้ปกติ"],
-    remediation: ["ตรวจ PK/KEK/NVRAM", "ตรวจ ESXi patch level"]
-  },
-  {
-    id: "6.1",
-    section: "Windows 10 22H2 บน ESXi 7.0",
-    title: "Client legacy baseline",
-    purpose: "ทดสอบ Windows 10 VM ที่ยังมีอยู่ใน production",
-    os: "Windows 10 22H2",
-    esxi: "ESXi 7.0",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "Optional",
-    encryption: "Optional",
-    steps: ["ติดตั้งหรือ clone Windows 10 22H2", "patch ให้ล่าสุดตาม support/ESU ที่มี", "run check ก่อนเริ่ม", "trigger Secure Boot update", "reboot 2 รอบ", "check CA/KEK/Event log"],
-    expected: ["ถ้าอยู่ใน supported servicing/ESU ต้อง update ได้", "ถ้าไม่มี support/ESU ให้จัดเป็น exception"],
-    remediation: ["ตรวจ ESXi 7 NVRAM persistence", "ตรวจ PK/KEK", "พิจารณา upgrade เป็น Windows 11 หรือ supported OS"]
-  },
-  {
-    id: "7.1",
-    section: "Windows 11 บน ESXi 8.0",
-    title: "Windows 11 baseline",
-    purpose: "baseline สำหรับ Windows client รุ่นใหม่",
-    os: "Windows 11 24H2",
-    esxi: "ESXi 8.0.2+",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "ON",
-    encryption: "Optional",
-    steps: ["ติดตั้ง Windows 11", "patch ให้ล่าสุด", "install VMware Tools", "run check ก่อนเริ่ม", "trigger Secure Boot update", "reboot 2 รอบ", "check CA/KEK/Event log"],
-    expected: ["CA 2023 และ KEK 2023 เป็น True", "boot manager update สำเร็จ", "VM boot ได้ปกติ"],
-    remediation: ["ตรวจ vTPM requirement", "ตรวจ PK/KEK/NVRAM", "ถ้าเป็น standalone ESXi ที่จัดการ vTPM ไม่ได้ ให้ทดสอบบน vCenter-managed environment"]
-  },
-  {
-    id: "8.1",
-    section: "Linux RHEL-family บน ESXi 8.0",
-    title: "Secure Boot baseline",
-    purpose: "ตรวจว่า Linux VM boot chain ยังผ่าน Secure Boot หลัง update package",
-    os: "RHEL/Rocky/Alma/Oracle Linux 8/9",
-    esxi: "ESXi 8.0.2+",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "Optional",
-    encryption: "Optional",
-    steps: ["ติดตั้ง OS จาก supported ISO", "update package ล่าสุด", "run mokutil --sb-state/--pk/--kek/--db/--dbx", "rpm -q shim grub2-efi-x64 grub2-tools kernel", "reboot 2 รอบ", "run check ซ้ำ"],
-    expected: ["SecureBoot enabled", "boot ได้ทุกครั้ง", "shim/grub/kernel มาจาก supported repo"],
-    remediation: ["ปิด Secure Boot ชั่วคราว", "boot เข้า OS", "update shim, grub2, kernel", "เปิด Secure Boot กลับแล้ว retest"]
-  },
-  {
-    id: "9.1",
-    section: "Ubuntu LTS บน ESXi 8.0",
-    title: "Secure Boot baseline",
-    purpose: "ตรวจ Ubuntu VM ที่เปิด Secure Boot",
-    os: "Ubuntu 22.04/24.04 LTS",
-    esxi: "ESXi 8.0.2+",
-    firmware: "EFI",
-    secureBoot: "ON",
-    vtpm: "Optional",
-    encryption: "Optional",
-    steps: ["ติดตั้ง OS จาก supported ISO", "update package ล่าสุด", "run mokutil --sb-state/--pk/--kek/--db/--dbx", "dpkg -l shim-signed shim grub-efi-amd64-signed grub2-common linux-image-generic", "reboot 2 รอบ", "run check ซ้ำ"],
-    expected: ["SecureBoot enabled", "boot ได้ทุกครั้ง", "shim-signed และ GRUB เป็น package จาก supported repo"],
-    remediation: ["ปิด Secure Boot ชั่วคราว", "update shim-signed, signed GRUB, kernel", "เปิด Secure Boot กลับแล้ว retest"]
-  }
-];
+const CASES_COLLECTION_NAME = "vmCa2023Cases";
+const CASES_STORAGE_KEY = "vm-ca2023-cases";
+
+let cases = loadLocalCases();
+let editingCaseId = null;
+let unsubscribeCases = null;
 
 let activeFilter = "all";
 let activeView = "tests";
@@ -272,6 +39,9 @@ const elements = {
   impact: document.querySelector("#metric-impact"),
   sync: document.querySelector("#sync-state"),
   setup: document.querySelector("#setup-panel"),
+  caseForm: document.querySelector("#case-form"),
+  caseFormMode: document.querySelector("#case-form-mode"),
+  cancelCaseEdit: document.querySelector("#cancel-case-edit"),
   configInput: document.querySelector("#firebase-config-input"),
   saveConfig: document.querySelector("#save-config"),
   clearConfig: document.querySelector("#clear-config"),
@@ -330,6 +100,15 @@ function wireEvents() {
     render();
   });
 
+  elements.caseForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await saveCaseFromForm();
+  });
+
+  elements.cancelCaseEdit.addEventListener("click", () => {
+    clearCaseForm();
+  });
+
   elements.saveConfig.addEventListener("click", () => {
     try {
       const value = JSON.parse(elements.configInput.value);
@@ -386,7 +165,19 @@ function wireEvents() {
 function render() {
   const visibleCases = filterCases();
   elements.list.innerHTML = "";
-  visibleCases.forEach((testCase) => elements.list.appendChild(renderCase(testCase)));
+  if (!cases.length) {
+    const empty = document.createElement("article");
+    empty.className = "case-card";
+    empty.innerHTML = "<p class=\"empty-state\">ยังไม่มี test case ใน DB กดสร้าง test case ใหม่ด้านบน</p>";
+    elements.list.appendChild(empty);
+  } else if (!visibleCases.length) {
+    const empty = document.createElement("article");
+    empty.className = "case-card";
+    empty.innerHTML = "<p class=\"empty-state\">ไม่พบ test case ตาม filter/search ที่เลือก</p>";
+    elements.list.appendChild(empty);
+  } else {
+    visibleCases.forEach((testCase) => elements.list.appendChild(renderCase(testCase)));
+  }
   renderMetrics();
   renderSummary();
   switchView();
@@ -403,6 +194,14 @@ function renderCase(testCase) {
   fragment.querySelector(".purpose").textContent = testCase.purpose;
   badge.textContent = statusLabels[result.status] || statusLabels.pending;
   badge.className = `badge ${result.status || "pending"}`;
+
+  const heading = fragment.querySelector(".case-heading");
+  const actions = document.createElement("div");
+  actions.className = "case-actions";
+  actions.appendChild(makeCaseActionButton("Edit", "secondary", () => editCase(testCase)));
+  actions.appendChild(makeCaseActionButton("Delete case", "danger", () => deleteCase(testCase.id)));
+  actions.appendChild(badge);
+  heading.appendChild(actions);
 
   const meta = fragment.querySelector(".case-meta");
   [
@@ -421,7 +220,7 @@ function renderCase(testCase) {
   fillList(fragment.querySelector(".steps"), testCase.steps);
   fillList(fragment.querySelector(".expected"), testCase.expected);
   fillList(fragment.querySelector(".remediation"), testCase.remediation);
-  fillCommands(fragment.querySelector(".commands"), getCommands(testCase));
+  fillCommands(fragment.querySelector(".commands"), (testCase.commands && testCase.commands.length) ? testCase.commands : getCommands(testCase));
 
   const form = fragment.querySelector(".result-form");
   Object.entries(result).forEach(([key, value]) => {
@@ -471,6 +270,102 @@ function renderCase(testCase) {
   return fragment;
 }
 
+function makeCaseActionButton(label, className, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function editCase(testCase) {
+  editingCaseId = testCase.id;
+  elements.caseForm.elements.caseId.value = testCase.id || "";
+  elements.caseForm.elements.caseId.disabled = true;
+  elements.caseForm.elements.section.value = testCase.section || "";
+  elements.caseForm.elements.title.value = testCase.title || "";
+  elements.caseForm.elements.order.value = testCase.order || "";
+  elements.caseForm.elements.purpose.value = testCase.purpose || "";
+  elements.caseForm.elements.os.value = testCase.os || "";
+  elements.caseForm.elements.esxi.value = testCase.esxi || "";
+  elements.caseForm.elements.firmware.value = testCase.firmware || "";
+  elements.caseForm.elements.secureBoot.value = testCase.secureBoot || "";
+  elements.caseForm.elements.vtpm.value = testCase.vtpm || "";
+  elements.caseForm.elements.encryption.value = testCase.encryption || "";
+  elements.caseForm.elements.steps.value = (testCase.steps || []).join("\n");
+  elements.caseForm.elements.expected.value = (testCase.expected || []).join("\n");
+  elements.caseForm.elements.remediation.value = (testCase.remediation || []).join("\n");
+  elements.caseForm.elements.commands.value = serializeCommands((testCase.commands && testCase.commands.length) ? testCase.commands : getCommands(testCase));
+  elements.caseFormMode.textContent = `กำลังแก้ไข ${testCase.id}`;
+  elements.caseForm.closest("details").open = true;
+  elements.caseForm.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function clearCaseForm() {
+  editingCaseId = null;
+  elements.caseForm.reset();
+  elements.caseForm.elements.caseId.disabled = false;
+  elements.caseFormMode.textContent = "สร้าง test case ใหม่";
+}
+
+async function saveCaseFromForm() {
+  const formData = new FormData(elements.caseForm);
+  const rawId = editingCaseId || formData.get("caseId") || `case-${Date.now()}`;
+  const id = sanitizeCaseId(rawId);
+  const payload = {
+    id,
+    section: formData.get("section") || "",
+    title: formData.get("title") || "",
+    order: Number(formData.get("order")) || cases.length + 1,
+    purpose: formData.get("purpose") || "",
+    os: formData.get("os") || "",
+    esxi: formData.get("esxi") || "",
+    firmware: formData.get("firmware") || "",
+    secureBoot: formData.get("secureBoot") || "",
+    vtpm: formData.get("vtpm") || "",
+    encryption: formData.get("encryption") || "",
+    steps: parseLines(formData.get("steps")),
+    expected: parseLines(formData.get("expected")),
+    remediation: parseLines(formData.get("remediation")),
+    commands: parseCommands(formData.get("commands")),
+    updatedAt: new Date().toISOString()
+  };
+
+  if (!payload.section || !payload.title) {
+    alert("กรุณาใส่ Section และ Title");
+    return;
+  }
+
+  if (firebaseApi) {
+    const ref = firebaseApi.doc(firebaseApi.db, CASES_COLLECTION_NAME, id);
+    await firebaseApi.setDoc(ref, payload, { merge: true });
+  }
+  cases = upsertCase(cases, payload);
+  saveLocalCases(cases);
+  clearCaseForm();
+  render();
+}
+
+async function deleteCase(caseId) {
+  const ok = confirm(`ลบ test case ${caseId} และผลลัพธ์ของ case นี้?`);
+  if (!ok) return;
+
+  if (firebaseApi) {
+    const caseRef = firebaseApi.doc(firebaseApi.db, CASES_COLLECTION_NAME, caseId);
+    const resultRef = firebaseApi.doc(firebaseApi.db, COLLECTION_NAME, caseId);
+    await Promise.all([
+      firebaseApi.deleteDoc(caseRef),
+      firebaseApi.deleteDoc(resultRef)
+    ]);
+  }
+  cases = cases.filter((item) => item.id !== caseId);
+  delete results[caseId];
+  saveLocalCases(cases);
+  saveLocalResults(results);
+  render();
+}
+
 function fillList(container, items) {
   items.forEach((item) => {
     const li = document.createElement("li");
@@ -481,6 +376,13 @@ function fillList(container, items) {
 
 function fillCommands(container, commands) {
   container.innerHTML = "";
+  if (!commands.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "ยังไม่มี command สำหรับ case นี้";
+    container.appendChild(empty);
+    return;
+  }
   commands.forEach((item) => {
     const box = document.createElement("div");
     box.className = "command-box";
@@ -489,6 +391,57 @@ function fillCommands(container, commands) {
       <pre><code>${escapeHtml(item.code)}</code></pre>
     `;
     container.appendChild(box);
+  });
+}
+
+function parseLines(value) {
+  return String(value || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function parseCommands(value) {
+  return String(value || "")
+    .split(/\n---+\n/g)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => {
+      const [label, ...codeLines] = block.split("\n");
+      return {
+        label: (label || "Command").trim(),
+        code: codeLines.join("\n").trim()
+      };
+    })
+    .filter((item) => item.code);
+}
+
+function serializeCommands(commands) {
+  return (commands || [])
+    .map((item) => `${item.label || "Command"}\n${item.code || ""}`.trim())
+    .join("\n---\n");
+}
+
+function sanitizeCaseId(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || `case-${Date.now()}`;
+}
+
+function upsertCase(list, payload) {
+  const next = list.filter((item) => item.id !== payload.id);
+  next.push(payload);
+  return sortCases(next);
+}
+
+function sortCases(list) {
+  return [...list].sort((a, b) => {
+    const orderDiff = (Number(a.order) || 9999) - (Number(b.order) || 9999);
+    if (orderDiff) return orderDiff;
+    return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
   });
 }
 
@@ -667,7 +620,11 @@ function renderKeyFindings(summary) {
   const findings = [];
   if (!summary.completed) {
     findings.push("ยังไม่มี result ที่บันทึกในระบบ");
-    findings.push("เริ่มจาก Windows Server 2022 บน ESXi 8.0 และ ESXi 7.0 เพื่อเทียบ baseline กับ risk");
+    if (cases.length) {
+      findings.push(`เริ่มจาก test case ลำดับแรก: ${cases.slice(0, 3).map((testCase) => testCase.id).join(", ")}`);
+    } else {
+      findings.push("ยังไม่มี test case ใน DB ให้สร้าง case แรกก่อนเริ่มบันทึกผล");
+    }
   } else {
     findings.push(`ความคืบหน้ารวม ${summary.completed}/${cases.length} test cases`);
     findings.push(`ผ่านแล้ว ${summary.pass} test cases`);
@@ -676,8 +633,11 @@ function renderKeyFindings(summary) {
     if (!summary.fail && !summary.impact) findings.push("ยังไม่พบ impact จากผลที่บันทึกไว้");
   }
 
-  const pendingCritical = ["3.1", "3.2", "4.1", "4.2"].filter((id) => (results[id] || defaultResult()).status === "pending");
-  if (pendingCritical.length) findings.push(`minimum critical tests ที่ยัง pending: ${pendingCritical.join(", ")}`);
+  const pendingTopCases = cases
+    .filter((testCase) => (results[testCase.id] || defaultResult()).status === "pending")
+    .slice(0, 4)
+    .map((testCase) => testCase.id);
+  if (pendingTopCases.length) findings.push(`test cases ที่ยัง pending ลำดับแรก: ${pendingTopCases.join(", ")}`);
 
   elements.keyFindings.innerHTML = "";
   findings.forEach((finding) => {
@@ -765,11 +725,31 @@ async function connectFirebase() {
 
     firebaseApi = { db, collection, doc, onSnapshot, setDoc, deleteDoc, serverTimestamp };
     await connectStorageIfEnabled(app, config);
+    subscribeToCases();
     subscribeToResults();
   } catch (error) {
     console.error(error);
     setSync(`เชื่อม Firebase ไม่สำเร็จ, ใช้ local fallback: ${error.message}`);
   }
+}
+
+function subscribeToCases() {
+  if (!firebaseApi) return;
+  if (unsubscribeCases) unsubscribeCases();
+
+  const ref = firebaseApi.collection(firebaseApi.db, CASES_COLLECTION_NAME);
+  unsubscribeCases = firebaseApi.onSnapshot(ref, (snapshot) => {
+    const nextCases = [];
+    snapshot.forEach((item) => {
+      nextCases.push(normalizeRemoteCase(item.id, item.data()));
+    });
+    cases = sortCases(nextCases);
+    saveLocalCases(cases);
+    render();
+  }, (error) => {
+    console.error(error);
+    setSync(`Cases sync error: ${error.message}`);
+  });
 }
 
 async function connectStorageIfEnabled(app, config) {
@@ -989,6 +969,27 @@ function normalizeRemoteResult(data) {
   };
 }
 
+function normalizeRemoteCase(id, data) {
+  return {
+    id: data.id || id,
+    section: data.section || "",
+    title: data.title || "",
+    order: Number(data.order) || 9999,
+    purpose: data.purpose || "",
+    os: data.os || "",
+    esxi: data.esxi || "",
+    firmware: data.firmware || "",
+    secureBoot: data.secureBoot || "",
+    vtpm: data.vtpm || "",
+    encryption: data.encryption || "",
+    steps: Array.isArray(data.steps) ? data.steps : [],
+    expected: Array.isArray(data.expected) ? data.expected : [],
+    remediation: Array.isArray(data.remediation) ? data.remediation : [],
+    commands: Array.isArray(data.commands) ? data.commands : [],
+    updatedAt: data.updatedAtIso || data.updatedAt?.toDate?.().toISOString?.() || data.updatedAt || ""
+  };
+}
+
 function getFirebaseConfig() {
   if (window.FIREBASE_CONFIG?.projectId) return window.FIREBASE_CONFIG;
   const localConfig = localStorage.getItem(CONFIG_KEY);
@@ -1108,6 +1109,18 @@ function loadLocalResults() {
 
 function saveLocalResults(nextResults) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(nextResults));
+}
+
+function loadLocalCases() {
+  try {
+    return sortCases(JSON.parse(localStorage.getItem(CASES_STORAGE_KEY)) || []);
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalCases(nextCases) {
+  localStorage.setItem(CASES_STORAGE_KEY, JSON.stringify(nextCases));
 }
 
 function setSync(message) {

@@ -6,5 +6,10 @@ service cloud.firestore {
       allow read, create, update: if true;
       allow delete: if true;
     }
+
+    match /vmCa2023Cases/{caseId} {
+      allow read, create, update: if true;
+      allow delete: if true;
+    }
   }
 }

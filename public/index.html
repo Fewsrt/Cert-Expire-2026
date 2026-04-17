@@ -56,6 +56,81 @@
       </section>
 
       <section id="tests-view" class="view active-view">
+        <section class="case-admin">
+          <details>
+            <summary>สร้าง / แก้ไข test case</summary>
+            <form id="case-form" class="case-form">
+              <label>
+                Test ID
+                <input name="caseId" type="text" placeholder="เช่น 10.1 หรือ WS2022-ESX8">
+              </label>
+              <label>
+                Section
+                <input name="section" type="text" placeholder="เช่น Windows Server 2022 บน ESXi 8.0" required>
+              </label>
+              <label>
+                Title
+                <input name="title" type="text" placeholder="ชื่อ test" required>
+              </label>
+              <label>
+                Order
+                <input name="order" type="number" min="1" step="1" placeholder="ลำดับ">
+              </label>
+              <label class="wide">
+                Purpose
+                <textarea name="purpose" rows="2" placeholder="เป้าหมายของ test"></textarea>
+              </label>
+              <label>
+                OS
+                <input name="os" type="text" placeholder="Windows Server 2022">
+              </label>
+              <label>
+                ESXi
+                <input name="esxi" type="text" placeholder="ESXi 8.0.2+">
+              </label>
+              <label>
+                Firmware
+                <input name="firmware" type="text" placeholder="EFI">
+              </label>
+              <label>
+                Secure Boot
+                <input name="secureBoot" type="text" placeholder="ON / OFF">
+              </label>
+              <label>
+                vTPM
+                <input name="vtpm" type="text" placeholder="ON / OFF / Optional">
+              </label>
+              <label>
+                Encryption
+                <input name="encryption" type="text" placeholder="BitLocker / OFF / Optional">
+              </label>
+              <label class="wide">
+                Steps
+                <textarea name="steps" rows="4" placeholder="หนึ่งบรรทัดต่อหนึ่ง step"></textarea>
+              </label>
+              <label class="wide">
+                Expected
+                <textarea name="expected" rows="4" placeholder="หนึ่งบรรทัดต่อหนึ่ง expected result"></textarea>
+              </label>
+              <label class="wide">
+                Remediation
+                <textarea name="remediation" rows="4" placeholder="หนึ่งบรรทัดต่อหนึ่งวิธีแก้"></textarea>
+              </label>
+              <label class="wide">
+                Commands
+                <textarea name="commands" rows="8" placeholder="รูปแบบ: บรรทัดแรกเป็นชื่อ command, บรรทัดถัดไปเป็น code, คั่นหลาย command ด้วย ---"></textarea>
+              </label>
+              <div class="form-footer">
+                <small id="case-form-mode">สร้าง test case ใหม่</small>
+                <div class="row-actions">
+                  <button id="cancel-case-edit" type="button" class="secondary">Cancel</button>
+                  <button type="submit">Save case</button>
+                </div>
+              </div>
+            </form>
+          </details>
+        </section>
+
         <nav class="filters" aria-label="filters">
           <button class="filter active" data-filter="all" type="button">ทั้งหมด</button>
           <button class="filter" data-filter="pending" type="button">ยังไม่เริ่ม</button>
