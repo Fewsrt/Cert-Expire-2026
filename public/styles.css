@@ -48,6 +48,12 @@ button.filter {
   color: var(--ink);
 }
 
+button.danger {
+  border-color: var(--red);
+  background: var(--red);
+  color: #fff;
+}
+
 button.filter.active {
   background: var(--green);
   border-color: var(--green);

@@ -276,6 +276,7 @@ const elements = {
   search: document.querySelector("#search-input"),
   exportJson: document.querySelector("#export-json"),
   resetLocal: document.querySelector("#reset-local"),
+  resetAll: document.querySelector("#reset-all"),
   summaryHeadline: document.querySelector("#summary-headline"),
   summaryPercent: document.querySelector("#summary-percent"),
   summaryCoverage: document.querySelector("#summary-coverage"),
@@ -354,6 +355,14 @@ function wireEvents() {
     localStorage.removeItem(STORAGE_KEY);
     results = {};
     render();
+  });
+
+  elements.resetAll.addEventListener("click", async () => {
+    const firstConfirm = confirm("ต้องการล้างผลทดสอบทั้งหมดจาก Firestore และ local browser ใช่ไหม?");
+    if (!firstConfirm) return;
+    const secondConfirm = prompt('พิมพ์ RESET เพื่อยืนยันการล้างข้อมูลทั้งหมด');
+    if (secondConfirm !== "RESET") return;
+    await resetAllResults();
   });
 
   elements.closeImageModal.addEventListener("click", () => closeImageModal());
@@ -708,7 +717,7 @@ async function connectFirebase() {
 
   try {
     setSync("กำลังเชื่อม Firebase");
-    const [{ initializeApp }, { getFirestore, collection, doc, onSnapshot, setDoc, serverTimestamp }] = await Promise.all([
+    const [{ initializeApp }, { getFirestore, collection, doc, onSnapshot, setDoc, deleteDoc, serverTimestamp }] = await Promise.all([
       import("https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js"),
       import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js")
     ]);
@@ -716,7 +725,7 @@ async function connectFirebase() {
     const app = initializeApp(config);
     const db = getFirestore(app);
 
-    firebaseApi = { db, collection, doc, onSnapshot, setDoc, serverTimestamp };
+    firebaseApi = { db, collection, doc, onSnapshot, setDoc, deleteDoc, serverTimestamp };
     await connectStorageIfEnabled(app, config);
     subscribeToResults();
   } catch (error) {
@@ -912,6 +921,26 @@ async function saveResult(caseId, payload) {
     updatedAt: firebaseApi.serverTimestamp(),
     updatedAtIso: payload.updatedAt
   }, { merge: true });
+}
+
+async function resetAllResults() {
+  try {
+    setSync("กำลังล้างข้อมูลทั้งหมด");
+    if (firebaseApi) {
+      await Promise.all(cases.map((testCase) => {
+        const ref = firebaseApi.doc(firebaseApi.db, COLLECTION_NAME, testCase.id);
+        return firebaseApi.deleteDoc(ref);
+      }));
+    }
+    localStorage.removeItem(STORAGE_KEY);
+    results = {};
+    render();
+    setSync(firebaseApi ? "ล้างข้อมูลทั้งหมดแล้ว และ Firestore sync อัตโนมัติ" : "ล้าง local data แล้ว");
+  } catch (error) {
+    console.error(error);
+    alert(`ล้างข้อมูลไม่สำเร็จ: ${error.message}`);
+    setSync(`ล้างข้อมูลไม่สำเร็จ: ${error.message}`);
+  }
 }
 
 function normalizeRemoteResult(data) {
