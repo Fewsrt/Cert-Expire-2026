@@ -1,5 +1,13 @@
 # Final Compliance Check Runbook
 
+## Document version
+- Version: `v1.1`
+- Updated: `2026-04-17`
+- Change summary:
+  - รวม test cases เดิม + UAT matrix ให้เป็นชุดเดียว
+  - จัดกลุ่ม scenario ใหม่ตาม `Core checks` และ `Combination checks (Firmware/OS/ESXi)`
+  - ลดหัวข้อซ้ำและทำให้ใช้เป็น execution sheet ได้ทันที
+
 ## Purpose
 - Provide a final method to decide which machines are `COMPLIANT` / `NON_COMPLIANT` / `UNKNOWN`.
 - Use this after rollout and remediation steps are complete.
@@ -77,85 +85,47 @@ rpm -q shim grub2
 - Change window summary
 - Verification samples for each OS/environment type
 
-## Test cases (TH) - สิ่งที่ต้องเทส
+## Unified test matrix (v1.1)
+> ตารางนี้เป็นชุดทดสอบหลักชุดเดียว (รวมข้อที่ซ้ำแล้ว) ใช้ได้ทั้ง SIT/UAT และ final sign-off
 
-### 1) Pre-check / Inventory
-| Test Case ID | รายการทดสอบ | วิธีทดสอบย่อ | Expected Result |
-|---|---|---|---|
-| TC-01 | ตรวจ scope เครื่องเป้าหมาย | แยก `VMwareVM`/`BareMetal`, OS, UEFI, Secure Boot | มีรายการเครื่องครบและระบุสถานะพื้นฐานชัดเจน |
-| TC-02 | ตรวจความพร้อมแพลตฟอร์ม | ตรวจ ESXi build, VM compatibility, datastore/snapshot health | ไม่พบ blocker ก่อน rollout |
-
-### 2) Windows rollout + verification
-| Test Case ID | รายการทดสอบ | วิธีทดสอบย่อ | Expected Result |
-|---|---|---|---|
-| TC-03 | Opt-in สำเร็จ | ตั้ง `MicrosoftUpdateManagedOptIn=1` | ค่า registry ถูกต้อง |
-| TC-04 | Trigger task สำเร็จ | รัน `\Microsoft\Windows\PI\Secure-Boot-Update` | Task สำเร็จ ไม่มี error สำคัญ |
-| TC-05 | Verify CA 2023 | ตรวจ `Confirm-SecureBootUEFI`, ค้นหา CA2023 ใน `db`, ตรวจ `UEFICA2023Status` | `SecureBoot=True`, พบ CA2023, status เป็นค่าที่คาดหวัง |
-| TC-06 | Reboot stability (Windows) | Reboot อย่างน้อย 2 รอบและ verify ซ้ำ | ผล verify คงที่ ไม่เกิด drift |
-
-### 3) Linux verification
-| Test Case ID | รายการทดสอบ | วิธีทดสอบย่อ | Expected Result |
-|---|---|---|---|
-| TC-07 | Secure Boot state | รัน `mokutil --sb-state` | แสดง enabled ตาม policy |
-| TC-08 | Boot-chain package status | ตรวจ `shim/grub` ด้วย `dpkg` หรือ `rpm` | ได้แพ็กเกจจากช่องทางที่ยัง support และไม่ใช่ชุดเก่าเสี่ยง |
-| TC-09 | Reboot stability (Linux) | Reboot อย่างน้อย 2 รอบ | บูตผ่านต่อเนื่อง ไม่มี failure จาก SBAT/dbx |
-
-### 4) VMware-specific risk cases
-| Test Case ID | รายการทดสอบ | วิธีทดสอบย่อ | Expected Result |
-|---|---|---|---|
-| TC-10 | NVRAM persistence | Verify ซ้ำหลัง reboot | ค่า UEFI variable ไม่หายหลัง reboot |
-| TC-11 | KB 421593 pattern | ทำ remediation ตาม path แล้ว verify ใหม่ | กลับมาผ่าน compliance ได้ |
-| TC-12 | KB 423919 pattern | ทำ manual PK update ตาม change control แล้ว verify | อัปเดตสำเร็จและบูตได้เสถียร |
-
-### 5) Negative / failure / recovery
-| Test Case ID | รายการทดสอบ | วิธีทดสอบย่อ | Expected Result |
-|---|---|---|---|
-| TC-13 | Missing telemetry | จำลองเครื่องที่ไม่มี agent/tool data | จัดสถานะเป็น `UNKNOWN` |
-| TC-14 | Secure Boot disabled unexpectedly | พบเครื่องที่ Secure Boot ถูกปิด | จัดเป็น `NON_COMPLIANT` และเข้าสู่ remediation |
-| TC-15 | Linux recovery path | จำลอง boot failure แล้วทำ recovery runbook | กู้ระบบกลับมาและเปิด Secure Boot ได้ |
-
-### 6) Compliance output / audit readiness
-| Test Case ID | รายการทดสอบ | วิธีทดสอบย่อ | Expected Result |
-|---|---|---|---|
-| TC-16 | Final classification | ตรวจการ map `COMPLIANT/NON_COMPLIANT/UNKNOWN` | จัดสถานะถูกต้องตามเกณฑ์ |
-| TC-17 | Evidence completeness | ตรวจ command output, screenshot, event log, reboot proof | หลักฐานครบพร้อม audit |
-| TC-18 | CSV report quality | ตรวจคอลัมน์ required fields ครบ | ใช้ sign-off ได้ทันที |
-
-## Exit gate (minimum pass criteria)
-- Windows: `Confirm-SecureBootUEFI=True` + พบ CA2023 ใน `db` + `UEFICA2023Status` expected + ผ่านหลัง reboot >= 2 รอบ
-- Linux: Secure Boot enabled + boot-chain current จาก supported repo + reboot >= 2 รอบแล้วเสถียร
-- VMware: ไม่เกิด UEFI/NVRAM persistence drift หลัง reboot
-- เอกสาร: มี evidence ครบ และ final CSV พร้อม sign-off
-
-## UAT matrix (scenario-based) - Firmware / OS / ESXi combinations
-> ใช้ตารางนี้เป็น execution sheet ได้เลย โดยกรอก Owner, วันที่, ผลทดสอบ และหลักฐานต่อแถว
-
+### A) Core checks (ต้องผ่านทุก wave)
 | Test Case ID | Scenario | OS | Environment | Priority | Owner | Test Data/Setup | Expected Result | Pass/Fail | Evidence Link | Remark |
 |---|---|---|---|---|---|---|---|---|---|---|
-| UAT-PHY-01 | Physical firmware old + OS old | Windows | BareMetal | High |  | เครื่อง physical ที่ BIOS/UEFI เก่า + Windows รุ่นเก่าใน scope | ผ่านได้เฉพาะเมื่ออัปเดตครบ; ถ้าไม่ผ่านต้องเข้า remediation |  |  |  |
-| UAT-PHY-02 | Physical firmware old + OS old | Linux | BareMetal | High |  | เครื่อง physical firmware เก่า + Linux boot-chain เก่า | มีโอกาสบูตล้มเหลวเมื่อ SBAT/dbx เข้มขึ้น; ต้องมี recovery path |  |  |  |
-| UAT-PHY-03 | Physical firmware new + OS old | Windows | BareMetal | High |  | firmware ใหม่ + Windows เก่า | ดีกว่าเคส firmware เก่า แต่ยังเสี่ยงที่ OS path ไม่ครบ |  |  |  |
-| UAT-PHY-04 | Physical firmware new + OS old | Linux | BareMetal | High |  | firmware ใหม่ + Linux เก่า | ต้องยืนยัน shim/grub current จาก repo ที่ support |  |  |  |
-| UAT-PHY-05 | Physical firmware old + OS new | Windows | BareMetal | High |  | firmware เก่า + Windows ใหม่ | อาจติดที่ firmware behavior; ต้อง verify หลัง reboot >= 2 รอบ |  |  |  |
-| UAT-PHY-06 | Physical firmware old + OS new | Linux | BareMetal | High |  | firmware เก่า + Linux ใหม่ | บูตต้องเสถียรและ Secure Boot enabled |  |  |  |
-| UAT-PHY-07 | Physical firmware new + OS new | Windows | BareMetal | Critical |  | firmware ใหม่ + Windows 11/Server ใหม่ | Golden path ควรผ่านครบและเสถียร |  |  |  |
-| UAT-PHY-08 | Physical firmware new + OS new | Linux | BareMetal | Critical |  | firmware ใหม่ + Linux supported ล่าสุด | Golden path ควรผ่านครบและเสถียร |  |  |  |
-| UAT-VM-01 | VM on ESXi 7 | Windows | VMwareVM | Critical |  | VM EFI + Secure Boot บน ESXi 7 | ผ่านได้แต่ต้องจับตา NVRAM persistence สูงเป็นพิเศษ |  |  |  |
-| UAT-VM-02 | VM on ESXi 7 | Linux | VMwareVM | High |  | Linux VM บน ESXi 7 | ต้องบูตผ่าน + verify boot chain + reboot stability |  |  |  |
-| UAT-VM-03 | VM on ESXi 8 | Windows | VMwareVM | Critical |  | Windows VM บน ESXi 8 | ควรเสถียรกว่า ESXi 7 แต่ยังต้อง verify ซ้ำ |  |  |  |
-| UAT-VM-04 | VM on ESXi 8 | Linux | VMwareVM | High |  | Linux VM บน ESXi 8 | ผ่านเมื่อ Secure Boot และ boot chain เป็น current state |  |  |  |
-| UAT-VM-05 | VM created on ESXi 7 then host upgraded to ESXi 8 | Windows | VMwareVM | Critical |  | VM เดิม (legacy) ย้าย/อัป host มา ESXi 8 | ต้องตรวจ legacy NVRAM pattern และ verify หลายรอบ |  |  |  |
-| UAT-VM-06 | VM created on ESXi 7 then host upgraded to ESXi 8 | Linux | VMwareVM | High |  | Linux VM เดิมจาก ESXi 7 | บูตต้องคงที่หลัง host upgrade และ reboot cycle |  |  |  |
-| UAT-NVRAM-01 | NVRAM persistence test (warm/cold reboot) | Windows | VMwareVM | Critical |  | อัปเดตเสร็จแล้วทดสอบ reboot หลายแบบ | ค่า CA/status ไม่หายหลัง reboot/cold boot |  |  |  |
-| UAT-NVRAM-02 | NVRAM persistence test (warm/cold reboot) | Linux | VMwareVM | High |  | Linux VM หลังอัปเดต boot chain | ค่า Secure Boot state คงที่ทุก reboot |  |  |  |
-| UAT-SNP-01 | Revert snapshot -> check NVRAM rolled back to old CA | Windows | VMwareVM | Critical |  | สร้าง snapshot ก่อน rollout แล้ว revert | ต้องตรวจพบ drift และจัดสถานะให้ถูกต้อง |  |  |  |
-| UAT-SNP-02 | Revert snapshot -> check NVRAM rolled back to old CA | Linux | VMwareVM | High |  | Linux snapshot/revert flow | ตรวจพบการย้อน state ได้และระบุผลตรงจริง |  |  |  |
-| UAT-SEC-01 | Disable Secure Boot intentionally | Windows | BareMetal/VMwareVM | Critical |  | ปิด Secure Boot ชั่วคราวแล้ว validate | ต้องถูกจัด `NON_COMPLIANT` ทันที |  |  |  |
-| UAT-SEC-02 | Disable Secure Boot intentionally | Linux | BareMetal/VMwareVM | Critical |  | ปิด Secure Boot แล้วทดสอบ | ต้องถูกจัด `NON_COMPLIANT` ทันที |  |  |  |
-| UAT-TPL-01 | Create template on ESXi 8.0.3 then deploy on ESXi 7 | Windows | VMwareVM | High |  | Template สร้างบน 8.0.3 แล้ว deploy ลง host 7 | ต้องผ่าน compatibility + verify CA2023 + reboot stability |  |  |  |
-| UAT-TPL-02 | Create template on ESXi 8.0.3 then deploy on ESXi 7 | Linux | VMwareVM | High |  | Linux template จาก 8.0.3 ไป ESXi 7 | ต้องบูตผ่านและ Secure Boot state คงที่ |  |  |  |
+| CORE-01 | Inventory and scope readiness | Windows/Linux | BareMetal/VMwareVM | Critical |  | ระบุเครื่องเป้าหมาย + UEFI + Secure Boot + OS type | Inventory ครบและพร้อมเริ่ม rollout |  |  |  |
+| CORE-02 | Platform readiness check | Windows/Linux | VMwareVM | Critical |  | ตรวจ ESXi build, VM compatibility, datastore/snapshot health | ไม่พบ blocker ด้าน platform |  |  |  |
+| CORE-03 | Windows CA2023 verification | Windows | BareMetal/VMwareVM | Critical |  | รัน verify command หลัง update | `SecureBoot=True`, พบ CA2023, `UEFICA2023Status` expected |  |  |  |
+| CORE-04 | Linux Secure Boot and boot-chain verification | Linux | BareMetal/VMwareVM | Critical |  | ตรวจ `mokutil` + `shim/grub` package state | Secure Boot enabled, boot-chain current จาก supported repo |  |  |  |
+| CORE-05 | Reboot stability >= 2 rounds | Windows/Linux | BareMetal/VMwareVM | Critical |  | Warm reboot/cold reboot อย่างน้อย 2 รอบ | ผล verify คงที่ ไม่เกิด drift |  |  |  |
+| CORE-06 | Classification and evidence quality | Windows/Linux | BareMetal/VMwareVM | Critical |  | จัดสถานะ + แนบหลักฐาน | Map สถานะถูกต้อง + หลักฐานครบ audit |  |  |  |
 
-### Execution notes for matrix
-- ทุกเคสต้องมีอย่างน้อย: baseline ก่อนทำ, ผลหลังทำ, และผลหลัง reboot >= 2 รอบ
-- ถ้าเป็น VMware VM ให้เก็บข้อมูล ESXi build, VM compatibility level, snapshot state, datastore status ทุกครั้ง
+### B) Combination checks (Firmware / OS / ESXi)
+| Test Case ID | Scenario | OS | Environment | Priority | Owner | Test Data/Setup | Expected Result | Pass/Fail | Evidence Link | Remark |
+|---|---|---|---|---|---|---|---|---|---|---|
+| COMBO-PHY-01 | Physical firmware old + OS old | Windows | BareMetal | High |  | BIOS/UEFI เก่า + Windows รุ่นเก่าใน scope | ผ่านได้เมื่อ remediation ครบ หรือระบุเป็น exception ชัดเจน |  |  |  |
+| COMBO-PHY-02 | Physical firmware old + OS old | Linux | BareMetal | High |  | firmware เก่า + Linux boot-chain เก่า | หาก fail ต้องเข้ากระบวนการ recovery path |  |  |  |
+| COMBO-PHY-03 | Physical firmware new + OS old | Windows/Linux | BareMetal | High |  | firmware ใหม่ + OS เก่า | ต้องผ่าน verify และ reboot stability |  |  |  |
+| COMBO-PHY-04 | Physical firmware old + OS new | Windows/Linux | BareMetal | High |  | firmware เก่า + OS ใหม่ | ต้องพิสูจน์ว่า firmware ไม่ทำให้ verify drift |  |  |  |
+| COMBO-PHY-05 | Physical firmware new + OS new (golden path) | Windows/Linux | BareMetal | Critical |  | baseline ใหม่ทั้งหมด | ควรผ่านครบและใช้เป็น benchmark |  |  |  |
+| COMBO-VM-01 | VM on ESXi 7 | Windows/Linux | VMwareVM | Critical |  | VM EFI + Secure Boot บน ESXi 7 | ผ่านได้แต่ต้องเน้นตรวจ persistence |  |  |  |
+| COMBO-VM-02 | VM on ESXi 8 | Windows/Linux | VMwareVM | Critical |  | VM EFI + Secure Boot บน ESXi 8 | ควรเสถียรกว่า ESXi 7 และผ่าน verify ซ้ำ |  |  |  |
+| COMBO-VM-03 | VM created on ESXi 7 then host upgraded to ESXi 8 | Windows/Linux | VMwareVM | Critical |  | VM legacy ย้ายมา host ใหม่ | ต้องไม่เกิด legacy NVRAM drift หลัง reboot |  |  |  |
+| COMBO-VM-04 | Create template on ESXi 8.0.3 then deploy on ESXi 7 | Windows/Linux | VMwareVM | High |  | Template crossover 8.0.3 -> 7 | ต้องผ่าน compatibility + verify + reboot stability |  |  |  |
+
+### C) Risk and negative checks
+| Test Case ID | Scenario | OS | Environment | Priority | Owner | Test Data/Setup | Expected Result | Pass/Fail | Evidence Link | Remark |
+|---|---|---|---|---|---|---|---|---|---|---|
+| RISK-01 | NVRAM persistence test | Windows/Linux | VMwareVM | Critical |  | ทดสอบ warm/cold reboot ต่อเนื่อง | ค่า Secure Boot-related state ไม่หาย |  |  |  |
+| RISK-02 | Revert snapshot then check old CA/state rollback | Windows/Linux | VMwareVM | Critical |  | Snapshot ก่อน rollout แล้ว revert | ตรวจพบ rollback ได้ และจัดสถานะตรงจริง |  |  |  |
+| RISK-03 | Disable Secure Boot intentionally | Windows/Linux | BareMetal/VMwareVM | Critical |  | ปิด Secure Boot แล้วรัน validation | ต้องถูกจัด `NON_COMPLIANT` ทันที |  |  |  |
+| RISK-04 | Missing telemetry / incomplete evidence | Windows/Linux | BareMetal/VMwareVM | High |  | ตัดข้อมูลบางส่วนหรือหลักฐานไม่ครบ | ต้องถูกจัด `UNKNOWN` จนกว่าจะเก็บข้อมูลครบ |  |  |  |
+
+## Exit gate (minimum pass criteria) - v1.1
+- Windows: `Confirm-SecureBootUEFI=True` + พบ CA2023 ใน `db` + `UEFICA2023Status` expected + ผ่านหลัง reboot >= 2 รอบ
+- Linux: Secure Boot enabled + boot-chain current จาก supported repo + reboot >= 2 รอบแล้วเสถียร
+- VMware: ไม่เกิด UEFI/NVRAM persistence drift หลัง reboot หรือหลัง host/version crossover
+- เอกสาร: มี evidence ครบ, final CSV ครบทุกคอลัมน์, และมี owner/remediation สำหรับทุก exception
+
+## Execution notes
+- ทุก test case ต้องเก็บผลอย่างน้อย 3 จุด: ก่อนทำ, หลังทำ, หลัง reboot cycle
 - ถ้าเคสล้มเหลว ให้ map เข้า remediation path ที่ระบุใน runbook และ re-test ด้วย Test Case ID เดิม
+- หากเปลี่ยนเงื่อนไขทดสอบ ให้สร้างเป็นเวอร์ชันใหม่ (`v1.2`, `v1.3`) และบันทึก change summary ด้านบนเสมอ
