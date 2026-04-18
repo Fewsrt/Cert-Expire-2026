@@ -1087,6 +1087,24 @@ Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='TPM-WMI'; Id=103
 Start-ScheduledTask -TaskName "\\Microsoft\\Windows\\PI\\Secure-Boot-Update"`
   };
 
+  const windowsBootloader = {
+    label: "Windows bootloader signing CA check",
+    description: "ตรวจไฟล์ boot manager ว่า signed ด้วย certificate chain ไหน ใช้ยืนยันว่า bootloader ย้ายไปใช้ Windows UEFI CA 2023 แล้วหรือยัง",
+    code: `$bootFiles = @(
+  "$env:SystemRoot\\Boot\\EFI\\bootmgfw.efi",
+  "$env:SystemDrive\\EFI\\Microsoft\\Boot\\bootmgfw.efi"
+)
+
+$bootFiles | ForEach-Object {
+  if (Test-Path $_) {
+    Write-Host "\\n===== $_ ====="
+    $sig = Get-AuthenticodeSignature $_
+    $sig | Select-Object Status, Path
+    $sig.SignerCertificate | Select-Object Subject, Issuer, NotBefore, NotAfter, Thumbprint
+  }
+}`
+  };
+
   const bitLocker = {
     label: "BitLocker check / suspend",
     description: "ใช้กับ VM ที่มี vTPM/BitLocker เพื่อลดโอกาสถาม recovery key หลัง Secure Boot variable เปลี่ยน",
@@ -1141,10 +1159,10 @@ mv vmname.nvram vmname.nvram_old
   if (testCase.os.includes("Ubuntu")) return [linuxUbuntu];
   if (testCase.os.includes("RHEL") || testCase.os.includes("Rocky") || testCase.os.includes("Oracle")) return [linuxRhel];
   if (testCase.id === "1.2") return [{ label: "Windows Secure Boot state", code: "Confirm-SecureBootUEFI" }];
-  if (testCase.id === "1.3") return [windowsCheck, windowsEventGuide, pkCheck];
-  if (testCase.id === "2.2") return [windowsCheck, windowsEventGuide, windowsTrigger, esxiNvram];
-  if (testCase.id === "4.2") return [bitLocker, windowsCheck, windowsTrigger];
-  return [windowsCheck, windowsEventGuide, windowsTrigger];
+  if (testCase.id === "1.3") return [windowsCheck, windowsBootloader, windowsEventGuide, pkCheck];
+  if (testCase.id === "2.2") return [windowsCheck, windowsBootloader, windowsEventGuide, windowsTrigger, esxiNvram];
+  if (testCase.id === "4.2") return [bitLocker, windowsCheck, windowsBootloader, windowsTrigger];
+  return [windowsCheck, windowsBootloader, windowsEventGuide, windowsTrigger];
 }
 
 function loadLocalResults() {
