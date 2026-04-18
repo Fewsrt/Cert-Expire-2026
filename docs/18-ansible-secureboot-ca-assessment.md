@@ -58,17 +58,16 @@ VCENTER_CSV=samples/vcenter_targets.csv ansible-inventory --list
 VCENTER_CSV=samples/vcenter_targets.csv ansible-playbook playbooks/secureboot_ca_assessment.yml
 ```
 
-Install **`sbsigntools`** (`sbverify`) on Linux guests in the same run (required for PKCS#7-based bootloader flags on Linux — see **Prerequisites and verification** below):
+By default the playbook **attempts to install `sbsigntools`** (`sbverify`) on Linux guests in the same run (PKCS#7 is preferred for bootloader CA flags — see **Prerequisites and verification** below). To skip that package step (assessment still uses embedded string scan if `sbverify` is absent):
 
 ```bash
-VCENTER_CSV=../path/to/vcenter-export.csv ansible-playbook playbooks/secureboot_ca_assessment.yml -e secureboot_install_sbsigntools=true
+VCENTER_CSV=../path/to/vcenter-export.csv ansible-playbook playbooks/secureboot_ca_assessment.yml -e secureboot_install_sbsigntools=false
 ```
 
 **RHEL / Alma / Rocky (optional):** if `sbsigntools` is still not found after enabling **CRB**, you may opt in to installing the **EPEL** release RPM from Fedora (adds a third-party repo — confirm with your security team):
 
 ```bash
 VCENTER_CSV=../path/to/vcenter-export.csv ansible-playbook playbooks/secureboot_ca_assessment.yml \
-  -e secureboot_install_sbsigntools=true \
   -e secureboot_install_epel_for_sbsigntools=true
 ```
 
@@ -78,18 +77,31 @@ This section summarizes **what the playbook uses**, **what you may need to insta
 
 ### Linux (guest)
 
-| What is measured | Tool in guest | Typical packages / notes |
+| What is measured | Tool in guest | One install path (playbook) |
 |---|---|---|
-| Firmware variables (`db`, `KEK`, …) | `mokutil` | Usually preinstalled (`mokutil` package). |
-| Active EFI binary — PKCS#7 listing | `sbverify --list` | **`sbsigntools`** (provides `sbverify`). This is what drives `active_bootloader_has_*` on Linux. |
+| Firmware variables (`db`, `KEK`, …) | `mokutil` | Preinstalled (`mokutil` package). |
+| Active EFI binary — PKCS#7 | `sbverify --list` only | From distro packages below (no scanning raw EFI bytes in the assessment). |
 
-**Install `sbverify` by distribution (manual checks):**
+**One package path per OS (what the playbook installs):**
 
-- **Debian / Ubuntu:** Package name is often **`sbsigntool`** or **`sbsigntools`**; **Ubuntu** may need the **universe** component enabled. Then: `sudo apt update && sudo apt install -y sbsigntool` (or `sbsigntools`). Verify: `command -v sbverify` and `sbverify --list /boot/efi/.../shim*.efi`.
-- **Red Hat Enterprise Linux:** `sbsigntools` is commonly shipped via **CodeReady Builder (CRB)** (repo id like `codeready-builder-for-rhel-9-x86_64-rpms`) or via **EPEL**. Enable CRB (example RHEL 9 x86_64): `sudo subscription-manager repos --enable codeready-builder-for-rhel-9-x86_64-rpms` (or `sudo dnf config-manager --set-enabled crb` where available), then `sudo dnf install -y sbsigntools`. If the package is still missing, install EPEL per [Fedora EPEL](https://docs.fedoraproject.org/en-US/epel/) and retry. Red Hat’s signing workflows for custom kernels/modules use **`pesign`**, **`mokutil`**, etc.; see [RHEL — Signing a kernel and modules for Secure Boot](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/managing_monitoring_and_updating_the_kernel/signing-a-kernel-and-modules-for-secure-boot_managing-monitoring-and-updating-the-kernel) for that context (the playbook’s **read-only** check uses **`sbverify`** on vendor shim/GRUB paths, not `pesign`).
-- **SUSE Linux Enterprise / openSUSE:** `sudo zypper install -y sbsigntools` (name may vary; `zypper search sbverify`).
+- **Debian / Ubuntu:** `apt install sbsigntool` (enable **universe** on Ubuntu if needed). Verify: `command -v sbverify`.
+- **Red Hat family:** Enable **CRB** (playbook does this), then `dnf install sbsigntools`. If your org allows **EPEL**, run the assessment with `-e secureboot_install_epel_for_sbsigntools=true` so the playbook adds EPEL and installs the same package name. Signing workflows for custom kernels use **`pesign`**; this assessment only **reads** vendor shim/GRUB via **`sbverify`** — see [RHEL — Signing a kernel and modules for Secure Boot](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/managing_monitoring_and_updating_the_kernel/signing-a-kernel-and-modules-for-secure-boot_managing-monitoring-and-updating-the-kernel).
+- **SUSE / openSUSE:** `zypper install sbsigntools` only.
 
 Upstream tooling for UEFI PE signatures: **sbsigntools** ([Fedora package overview](https://packages.fedoraproject.org/pkgs/sbsigntools/sbsigntools/)).
+
+#### References (what vendors and docs use to *read* EFI signatures)
+
+These sources align the playbook with common practice: **list or verify Authenticode/PKCS#7 on PE/EFI binaries** using user-space tools, not guessing from firmware alone.
+
+| OS family | Primary read path | Alternatives / notes | Source |
+|---|---|---|---|
+| **Debian / Ubuntu** | `sbverify` from **`sbsigntool`** / **`sbsigntools`** packages (`sbverify --list` on `*.efi`) | Ubuntu docs also use `mokutil` for SB state; wiki examples use `sbverify` with distro keys | [Debian `sbverify(1)`](https://manpages.debian.org/bookworm/sbsigntool/sbverify.1.en.html), [Ubuntu Secure Boot testing (sbverify examples)](https://wiki.ubuntu.com/UEFI/SecureBoot/Testing) |
+| **RHEL / Alma / Rocky** | **`sbverify`** from **`sbsigntools`** (often **CRB** and/or **EPEL**); `sbverify --list` on shim | Red Hat documents **`pesign`** for *inspecting* shim signing in support articles; signing workflows use **`pesign`**, **`openssl`**, **`mokutil`** | [Red Hat — Secure Boot certificate guidance (example: `pesign` / `sbverify` on shim)](https://access.redhat.com/articles/7128933), [RHEL 8 — signing kernel/modules for Secure Boot (`pesign`)](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/8/html/managing_monitoring_and_updating_the_kernel/signing-a-kernel-and-modules-for-secure-boot_managing-monitoring-and-updating-the-kernel) |
+| **SUSE / openSUSE** | **`sbsigntools`** / `sbverify`; same PE/PKCS#7 model | SUSE often documents **`osslsigncode`** + **`openssl pkcs7`** for extracting/viewing signatures on **kernel** PE images; analogous to EFI PE signing | [SUSE Communities — extract signer / verify kernel PE (osslsigncode, openssl)](https://www.suse.com/c/extract-the-signers-certificate-and-verify-the-signature-of-a-linux-kernel-image/), [openSUSE man `sbattach` / sbsigntools](https://manpages.opensuse.org/Tumbleweed/sbsigntools/sbattach.1.en.html) |
+| **Windows** | **`Get-AuthenticodeSignature`** + **`X509Chain`** (playbook); mount ESP then read `bootmgfw.efi` | Community/tools often use **`X509Certificate2::CreateFromSignedFile`**, **Sysinternals Sigcheck**, or dedicated EFI parsers — in part because **catalog vs embedded** Authenticode can confuse pure `Get-AuthenticodeSignature` on boot files | [PowerShell issue — embedded vs catalog signatures on boot binaries](https://github.com/PowerShell/PowerShell/issues/23820) |
+
+**Cross-distro:** `sbverify` is the widely referenced CLI for “list signatures on a UEFI secure boot image” (see [Arch `sbverify(1)`](https://man.archlinux.org/man/extra/sbsigntools/sbverify.1.en) and [Unix.SE — verifying an EFI binary](https://unix.stackexchange.com/questions/753526/verifying-a-signature-of-an-efi-binary)).
 
 ### Windows (guest)
 
@@ -118,6 +130,7 @@ The CSV report includes:
 | `decision` | `PASS_OR_LOW_RISK`, `IMPACTED`, `NEEDS_EVIDENCE`, `NEEDS_MANUAL_REVIEW`, or related final state |
 | `root_cause` | Why the host is not pass/low-risk |
 | `fix` | The remediation workflow for that host |
+| `operational_interpretation` | What this snapshot can and cannot claim about **migration/policy impact** vs **whether the system will boot on the next reboot** (static inspection only; not a firmware emulator) |
 
 ## Active Bootloader Logic
 
@@ -154,7 +167,7 @@ Active file:
 /boot/efi/EFI/redhat/shimx64.efi
 ```
 
-`active_bootloader_has_2011` / `active_bootloader_has_2023` are derived **only** from **`sbverify --list`** output (regex on PKCS#7 text). There is **no** strings/binary fallback for those flags. If `sbverify` is missing, non-zero, or the listing matches no known markers, the host is typically `NEEDS_EVIDENCE` until `sbsigntools` is installed and a successful listing is obtained.
+`active_bootloader_has_2011` / `active_bootloader_has_2023` come **only** from **`sbverify --list`** (PKCS#7 text) after the **`sbsigntools` / `sbsigntool`** package is installed. There is **no** raw-binary or strings heuristic. If `sbverify` is missing or fails, the row is typically `NEEDS_EVIDENCE` until the package is available and listing succeeds. **`operational_interpretation`** explains whether that row is sufficient to answer policy/migration questions and explicitly limits claims about **next-reboot boot success** (not proven by this scan).
 
 ## Remediation Mapping
 
@@ -164,6 +177,6 @@ Active file:
 | `kek_has_2023=false` on Windows | Same as above; if VMware still fails, check PK or regenerate NVRAM |
 | Windows bootloader has 2011 only | After CA/KEK 2023 are present, install latest CU, trigger task, reboot twice |
 | Linux active bootloader unowned | Reinstall/update vendor shim/GRUB packages and recreate EFI boot entry |
-| Linux `sbverify` missing | Install **`sbsigntools`** (enable **CRB** and/or **EPEL** on RHEL if needed; **universe** on Ubuntu), then rerun assessment |
+| Linux `sbverify_not_installed` / `NEEDS_EVIDENCE` | Install **`sbsigntool`** (Debian/Ubuntu) or **`sbsigntools`** (RHEL/SUSE) from vendor repos; RHEL may need **CRB** and/or **EPEL** per policy |
 | Linux bootloader has 2011 only | Update vendor shim/GRUB/kernel packages, reboot twice, rerun assessment |
 | Linux cannot boot with Secure Boot | Temporarily disable Secure Boot, boot OS, update boot chain, re-enable Secure Boot, rerun assessment |

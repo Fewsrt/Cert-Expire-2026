@@ -2,10 +2,11 @@
 # Not a Windows guest issue: "No module named winrm" = install pywinrm on the Ansible controller
 # (see ansible/install_controller_deps.sh). WinRM is used only from the controller.
 #
-# Optional: install sbsigntools (sbverify) on Linux guests before assessment (PKCS#7 for Linux flags):
-#   ansible-playbook playbooks/secureboot_ca_assessment.yml -e secureboot_install_sbsigntools=true
-# RHEL only — also enable EPEL from Fedora to pull sbsigntools when CRB is not enough (opt-in):
-#   -e secureboot_install_sbsigntools=true -e secureboot_install_epel_for_sbsigntools=true
+# By default installs distro sbsigntools/sbsigntool (sbverify) on Linux — bootloader evidence is PKCS#7 via sbverify only (no raw binary scan).
+# Skip package install:
+#   -e secureboot_install_sbsigntools=false
+# RHEL — use EPEL for sbsigntools when org allows (otherwise CRB + vendor repos only):
+#   -e secureboot_install_epel_for_sbsigntools=true
 
 - name: Preflight — ICMP from controller to each ansible_host (layer 3)
   hosts: localhost
@@ -39,15 +40,15 @@
     - name: SSH check (ping)
       ansible.builtin.ping:
 
-- name: Optional — install sbsigntools (sbverify) on Linux for bootloader PKCS7 evidence
+- name: Install sbsigntools (sbverify) on Linux when enabled (default on)
   hosts: linux
-  gather_facts: "{{ secureboot_install_sbsigntools | default(false) | bool }}"
+  gather_facts: true
   become: true
   become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
   tasks:
     - name: Install sbsigntools when secureboot_install_sbsigntools is true
       ansible.builtin.include_tasks: tasks/install_sbsigntools_linux_tasks.yml
-      when: secureboot_install_sbsigntools | default(false) | bool
+      when: secureboot_install_sbsigntools | default(true) | bool
 
 # Windows: Get-SecureBootUEFI for NVRAM vars; bootmgfw chain via Get-AuthenticodeSignature + X509Chain.
 # See docs/18-ansible-secureboot-ca-assessment.md — Get-AuthenticodeSignature may prefer catalog over embedded sigs.
@@ -256,6 +257,20 @@
           $ca2023Summary = "Firmware variables include CA 2023 but bootloader signature classification is unclear; review authenticode chain manually."
           }
 
+          $operationalInterpretation = if (-not $secureBoot) {
+          "Secure Boot off or unknown: does not assess UEFI-enforced boot or CA migration under SB."
+          } elseif (-not $bootloaderSummary.exists) {
+          "bootmgfw.efi not resolved: cannot relate policy to an on-disk boot manager file."
+          } elseif ($decision -like "IMPACTED*" -or $decision -like "*PENDING*" -or $decision -like "*VENDOR*") {
+          "Addresses firmware db/kek vs Authenticode chain on bootmgfw; catalog-vs-embedded Authenticode caveats apply. Indicates policy/migration gap, not a guaranteed immediate boot failure—validate after updates and reboot tests."
+          } elseif ($decision -eq "NEEDS_MANUAL_REVIEW") {
+          "Evidence gap: cannot confirm CA alignment on the active bootloader path from this run alone."
+          } elseif ($decision -eq "PASS_OR_LOW_RISK") {
+          "NVRAM + bootmgfw chain snapshot consistent with low policy concern; does not model future revocation or embedded-vs-catalog nuances without manual review."
+          } else {
+          "Based on Get-SecureBootUEFI (NVRAM) and Get-AuthenticodeSignature/X509Chain on bootmgfw.efi. Interprets CA rollout impact only; does not guarantee next reboot behavior (see Authenticode catalog limitations)."
+          }
+
           [PSCustomObject]@{
           host = $env:COMPUTERNAME
           os_family = "windows"
@@ -277,6 +292,7 @@
           decision = $decision
           root_cause = $rootCause
           fix = $fix
+          operational_interpretation = $operationalInterpretation
           } | ConvertTo-Json -Depth 8 -Compress
       register: windows_assessment_raw
       changed_when: false
@@ -285,7 +301,7 @@
       ansible.builtin.set_fact:
         secureboot_assessment: "{{ windows_assessment_raw.stdout | from_json }}"
 
-# Linux: mokutil for firmware vars; active bootloader flags only from sbverify --list (install sbsigntools). See docs/18.
+# Linux: mokutil + sbverify --list (from sbsigntools package only). See docs/18.
 - name: Assess Linux Secure Boot CA state
   hosts: linux
   gather_facts: false
@@ -520,7 +536,7 @@
             return ""
 
           def signature(path):
-            """Classify bootloader CA using only sbverify --list PKCS#7 output (no strings/binary heuristic for flags)."""
+            """PKCS#7 listing via sbverify (sbsigntools package) only — no heuristic binary scan."""
             pat_2011 = r"2011|Windows Production PCA|Microsoft Corporation UEFI CA 2011|Microsoft Corporation KEK CA 2011"
             pat_2023 = r"2023|Windows UEFI CA 2023|Microsoft UEFI CA 2023|Microsoft Corporation KEK 2K CA 2023|Option ROM UEFI CA 2023"
             if not path or not os.path.exists(path):
@@ -533,7 +549,7 @@
                     "exists": True,
                     "has_2011": False,
                     "has_2023": False,
-                    "text": "sbverify not found on PATH; install sbsigntools (sbverify) for PKCS#7-based bootloader CA flags.",
+                    "text": "sbverify not on PATH; install distro package sbsigntools (or Debian/Ubuntu sbsigntool) so PKCS#7 can be listed.",
                     "method": "sbverify_not_installed",
                 }
             rc, sb_out = run_rc(f"sbverify --list {json.dumps(path)} 2>&1")
@@ -607,8 +623,8 @@
             fix = "Check ESP mount and permissions; rerun with privileges that can read the EFI binary."
           elif active_file and owner and active_sig.get("method") == "sbverify_not_installed":
             decision = "NEEDS_EVIDENCE"
-            root_cause = "sbverify is not installed; bootloader CA flags require sbverify --list PKCS#7 output (no binary/string heuristic)."
-            fix = "Install sbsigntools (per distro repos; RHEL may need CRB/EPEL). Optionally rerun assessment with -e secureboot_install_sbsigntools=true."
+            root_cause = "sbverify not available; install distro sbsigntools (RHEL: CRB/EPEL per policy; Debian/Ubuntu: sbsigntool)"
+            fix = "Ensure the guest install play ran, or install the package manually, then rerun."
           elif active_file and owner and active_sig.get("method") == "sbverify_failed":
             decision = "NEEDS_EVIDENCE"
             root_cause = "sbverify --list failed (non-zero exit) for the active bootloader; see active_bootloader_signature_text"
@@ -616,7 +632,7 @@
           elif active_file and owner and active_sig.get("method") == "sbverify" and (not active_sig["has_2011"]) and (not active_sig["has_2023"]):
             decision = "NEEDS_EVIDENCE"
             root_cause = "sbverify --list did not match known Microsoft UEFI CA 2011/2023 markers in PKCS#7 output"
-            fix = "Review the PKCS#7 listing manually; confirm vendor shim/grub signing and CA rollout."
+            fix = "Review the PKCS#7 listing in the report; confirm vendor shim/grub signing and CA rollout."
           elif active_sig["has_2011"] and not active_sig["has_2023"]:
             decision = "IMPACTED_OR_VENDOR_CHAIN_REVIEW"
             root_cause = "Active EFI bootloader signature shows 2011 CA only"
@@ -643,13 +659,13 @@
             ca2023_summary = "KEK+db may show CA 2023 but the active EFI file is not owned by an OS package; remediate before trusting bootloader chain evidence."
           elif active_sig.get("method") == "sbverify_not_installed" and db_has_2023 and kek["has_kek_2023"]:
             ca2023_alignment = "EVIDENCE_SBVERIFY_MISSING"
-            ca2023_summary = "Firmware KEK/db show CA 2023 but sbverify is not installed; install sbsigntools to classify the active bootloader via PKCS#7 only."
+            ca2023_summary = "Firmware KEK/db show CA 2023 but sbverify (sbsigntools package) is not available; PKCS#7 on the active bootloader was not read."
           elif active_sig.get("method") == "sbverify_failed" and db_has_2023 and kek["has_kek_2023"]:
             ca2023_alignment = "EVIDENCE_SBVERIFY_FAILED"
             ca2023_summary = "Firmware KEK/db show CA 2023 but sbverify --list did not complete successfully; see active_bootloader_signature_text."
           elif not bl2023 and not bl2011 and db_has_2023 and kek["has_kek_2023"]:
             ca2023_alignment = "EVIDENCE_BOOTLOADER_CA_UNCLEAR"
-            ca2023_summary = "Firmware KEK/db show CA 2023 but sbverify --list output did not match CA 2011/2023 markers; review PKCS#7 listing in the report."
+            ca2023_summary = "Firmware KEK/db show CA 2023 but sbverify PKCS#7 output did not match CA 2011/2023 markers; review listing in the report."
           elif bl2023:
             ca2023_alignment = "ALIGNED_FW_AND_BOOTLOADER_SHOW_2023"
             ca2023_summary = "KEK+db include CA 2023 and sbverify --list matches 2023 markers on the active bootloader."
@@ -659,6 +675,33 @@
           else:
             ca2023_alignment = "BOOTLOADER_CHAIN_UNCLEAR"
             ca2023_summary = "Firmware variables include CA 2023 but bootloader PKCS#7 classification is unclear; review active_bootloader_signature_text."
+
+          def operational_interpretation_linux():
+            """Honest scope: what this scan can/cannot say about migration impact vs next reboot."""
+            if not secure_boot_enabled:
+              return "Secure Boot off or unknown: does not assess UEFI-enforced boot or CA migration under SB."
+            if not active_file:
+              return "Cannot map policy to an active EFI file: migration impact and boot chain are not assessed."
+            if active_file and not os.path.exists(active_file):
+              return "Boot entry references a missing file: likely boot break until repaired; CA labels are secondary."
+            if active_file and not owner:
+              return "EFI file not from an installed package: vendor-supported boot chain not established."
+            m = active_sig.get("method", "")
+            if m == "unreadable":
+              return "EFI file unreadable: PKCS#7 not obtained; cannot substantiate CA alignment or infer reboot outcome."
+            if m == "sbverify_not_installed":
+              return "No PKCS#7 read (sbverify missing): cannot substantiate CA 2011/2023 on the running bootloader file. May still boot today; migration verdict requires sbsigntools."
+            if m == "sbverify_failed":
+              return "sbverify failed: incomplete PKCS#7; do not treat decision as proof of boot success or failure."
+            if m == "sbverify" and (not active_sig["has_2011"]) and (not active_sig["has_2023"]):
+              return "PKCS#7 present but CA markers unmatched: review raw listing; not enough to claim firmware/boot alignment."
+            if decision.startswith("IMPACTED") or "VENDOR" in decision or "PENDING" in decision:
+              return "Addresses Microsoft CA 2023 rollout / policy gap vs on-disk chain; not a guarantee of immediate boot failure—validate after vendor updates and reboot tests."
+            if decision == "NEEDS_EVIDENCE":
+              return "Evidence gap: alone cannot confirm migration impact or predict next reboot; remediate tooling/path then rerun."
+            if decision == "PASS_OR_LOW_RISK":
+              return "NVRAM + PKCS#7 snapshot consistent with low policy concern; does not model future revocation or hardware-specific dbx."
+            return "Based on mokutil (firmware vars) and sbverify --list (package tool) on the resolved active EFI file owned by packages. Interprets CA rollout impact only; does not emulate firmware execution or guarantee next reboot."
 
           print(json.dumps({
             "host": os.uname().nodename,
@@ -687,6 +730,7 @@
             "decision": decision,
             "root_cause": root_cause,
             "fix": fix,
+            "operational_interpretation": operational_interpretation_linux(),
           }, separators=(",", ":")))
           PY
       args:
@@ -730,11 +774,11 @@
         dest: "{{ report_csv }}"
         mode: "0644"
         content: |
-          inventory_host,os_family,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,active_bootloader_signature_method,ca2023_alignment,ca2023_summary,decision,root_cause,fix
+          inventory_host,os_family,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,active_bootloader_signature_method,ca2023_alignment,ca2023_summary,decision,root_cause,fix,operational_interpretation
           {% for host in groups['all'] | difference(['localhost']) | sort %}
           {% set a = hostvars[host].secureboot_assessment | default({}) %}
           {% if a %}
-          {{ host }},{{ a.os_family | default('') }},{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},"{{ (a.active_bootloader_signature_method | default('')) | replace('"', '""') }}","{{ (a.ca2023_alignment | default('')) | replace('"', '""') }}","{{ (a.ca2023_summary | default('')) | replace('"', '""') }}",{{ a.decision | default('') }},"{{ (a.root_cause | default('')) | replace('"', '""') }}","{{ (a.fix | default('')) | replace('"', '""') }}"
+          {{ host }},{{ a.os_family | default('') }},{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},"{{ (a.active_bootloader_signature_method | default('')) | replace('"', '""') }}","{{ (a.ca2023_alignment | default('')) | replace('"', '""') }}","{{ (a.ca2023_summary | default('')) | replace('"', '""') }}",{{ a.decision | default('') }},"{{ (a.root_cause | default('')) | replace('"', '""') }}","{{ (a.fix | default('')) | replace('"', '""') }}","{{ (a.operational_interpretation | default('')) | replace('"', '""') }}"
           {% endif %}
           {% endfor %}
 

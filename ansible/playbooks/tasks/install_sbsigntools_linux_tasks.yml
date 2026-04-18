@@ -1,45 +1,26 @@
-# Included by secureboot_ca_assessment.yml (optional) and install_sbsigntools_linux.yml.
+# Included by secureboot_ca_assessment.yml and install_sbsigntools_linux.yml.
 # Requires gather_facts (os_family) on the play.
-# Best-effort: missing repos or zypper/dnf modules must not fail the overall assessment.
+# One package path per OS family — installs sbsigntools from distro repos only (sbverify for PKCS#7).
+# Optional override: -e sbsigntools_package_name=exact-package-name
 
-- name: Install package (explicit -e sbsigntools_package_name=...)
+- name: Install sbsigntools package (explicit override)
   ansible.builtin.package:
     name: "{{ sbsigntools_package_name }}"
     state: present
   when: sbsigntools_package_name | default('') | length > 0
 
-- name: Debian/Ubuntu — refresh apt cache (best effort)
-  ansible.builtin.apt:
-    update_cache: true
-  failed_when: false
-  changed_when: false
-  when:
-    - sbsigntools_package_name | default('') | length == 0
-    - ansible_facts['os_family'] == 'Debian'
-
-- name: Debian/Ubuntu — try package sbsigntools
-  ansible.builtin.apt:
-    name: sbsigntools
-    state: present
-    update_cache: false
-  register: apt_sbsigntools
-  ignore_errors: true
-  when:
-    - sbsigntools_package_name | default('') | length == 0
-    - ansible_facts['os_family'] == 'Debian'
-
-- name: Debian/Ubuntu — fallback package sbsigntool (common on Ubuntu)
+# Debian / Ubuntu — single package name used in practice (universe on Ubuntu if needed)
+- name: Debian/Ubuntu — apt install sbsigntool
   ansible.builtin.apt:
     name: sbsigntool
     state: present
-    update_cache: false
+    update_cache: true
   when:
     - sbsigntools_package_name | default('') | length == 0
     - ansible_facts['os_family'] == 'Debian'
-    - apt_sbsigntools is failed
 
-# RHEL: sbsigntools is often in CodeReady Builder (CRB) or EPEL — see docs/18-ansible-secureboot-ca-assessment.md
-- name: RedHat — enable CRB / powertools (best effort; helps dnf find sbsigntools)
+# RHEL / Alma / Rocky / Fedora — CRB/powertools then dnf install sbsigntools
+- name: RedHat — enable CRB / powertools (helps locate sbsigntools)
   ansible.builtin.shell: |
     set +e
     V="{{ ansible_distribution_major_version }}"
@@ -59,8 +40,19 @@
     - sbsigntools_package_name | default('') | length == 0
     - ansible_facts['os_family'] == 'RedHat'
 
-# Opt-in: adds Fedora EPEL repo (organizational policy may forbid). See docs/18.
-- name: RedHat — install EPEL release RPM (opt-in secureboot_install_epel_for_sbsigntools)
+# Without EPEL: vendor repos (CRB above) + sbsigntools
+- name: RedHat — install sbsigntools from enabled repos
+  ansible.builtin.package:
+    name: sbsigntools
+    state: present
+  failed_when: false
+  when:
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'RedHat'
+    - not (secureboot_install_epel_for_sbsigntools | default(false) | bool)
+
+# With EPEL opt-in: one path = EPEL release RPM then same package name
+- name: RedHat — install EPEL release (opt-in)
   ansible.builtin.command:
     argv:
       - bash
@@ -75,20 +67,18 @@
     - ansible_distribution_major_version | int >= 8
     - secureboot_install_epel_for_sbsigntools | default(false) | bool
 
-- name: RedHat — dnf install sbsigntools (best effort; may still need EPEL on some systems)
-  ansible.builtin.command:
-    argv:
-      - bash
-      - -lc
-      - command -v dnf >/dev/null 2>&1 && dnf install -y sbsigntools || yum install -y sbsigntools
-  register: rh_sbsign
+- name: RedHat — install sbsigntools (with EPEL available)
+  ansible.builtin.package:
+    name: sbsigntools
+    state: present
   failed_when: false
-  changed_when: rh_sbsign.rc == 0
   when:
     - sbsigntools_package_name | default('') | length == 0
     - ansible_facts['os_family'] == 'RedHat'
+    - secureboot_install_epel_for_sbsigntools | default(false) | bool
 
-- name: SUSE — zypper install sbsigntools (best effort)
+# SUSE / openSUSE — single zypper install
+- name: SUSE — zypper install sbsigntools
   ansible.builtin.command:
     argv:
       - zypper
@@ -103,11 +93,10 @@
     - sbsigntools_package_name | default('') | length == 0
     - ansible_facts['os_family'] == 'Suse'
 
-- name: Other Linux — package sbsigntools (best effort)
+- name: Other Linux — generic package name sbsigntools
   ansible.builtin.package:
     name: sbsigntools
     state: present
-  register: pkg_other
   failed_when: false
   when:
     - sbsigntools_package_name | default('') | length == 0
@@ -136,4 +125,4 @@
 
 - name: Report sbverify availability
   ansible.builtin.debug:
-    msg: "{{ (['sbverify: ' ~ which_sbverify.stdout] + (sbverify_version.stdout_lines | default([]))) if which_sbverify.rc == 0 else ['sbverify not installed; Linux assessment will mark bootloader CA as NEEDS_EVIDENCE until sbsigntools is available.'] }}"
+    msg: "{{ (['sbverify: ' ~ which_sbverify.stdout] + (sbverify_version.stdout_lines | default([]))) if which_sbverify.rc == 0 else ['sbverify not on PATH after package install; Linux bootloader PKCS#7 cannot be assessed without the distro sbsigntools/sbsigntool package.'] }}"
