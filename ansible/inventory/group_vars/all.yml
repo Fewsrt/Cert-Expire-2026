@@ -4,3 +4,5 @@
 # Or:  set -a && source playbooks/.env && set +a && ansible-playbook ...
 # File playbooks/.env should contain: ANSIBLE_PASSWORD=... (never commit that file)
 ansible_password: "{{ lookup('env', 'ANSIBLE_PASSWORD') }}"
+# Same secret for sudo (Linux) when play uses become: true
+ansible_become_password: "{{ lookup('env', 'ANSIBLE_PASSWORD') }}"

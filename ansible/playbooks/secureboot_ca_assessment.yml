@@ -270,6 +270,7 @@
 - name: Assess Linux Secure Boot CA state
   hosts: linux
   gather_facts: false
+  become: true
   tasks:
     - name: Collect Linux Secure Boot DB and bootloader CA evidence
       ansible.builtin.shell:
@@ -357,6 +358,11 @@
               return ""
             m = re.search(r"File\\(([^)]+)\\)", desc, re.I)
             inner = m.group(1).strip() if m else ""
+            if not inner:
+              # RHEL/Fedora efibootmgr: HD(1,GPT,...)/\EFI\redhat\shimx64.efi (no File() wrapper)
+              m_hd = re.search(r"HD\\([^)]+\\)/(.+?\\.efi)", desc, re.I | re.S)
+              if m_hd:
+                inner = m_hd.group(1).strip()
             if not inner:
               m2 = re.search(r"([\\/]EFI[\\/].+\.efi)", desc, re.I)
               inner = (m2.group(1).strip() if m2 else "")
