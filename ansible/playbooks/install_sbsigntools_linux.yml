@@ -1,0 +1,55 @@
+---
+# Install sbsigntools (provides `sbverify`) on Linux guests so secureboot_ca_assessment.yml
+# can use PKCS#7 listing instead of strings-only heuristics.
+#
+# One host (replace NAME with inventory hostname from your CSV):
+#   cd ansible && VCENTER_CSV=/path/to.csv ansible-playbook playbooks/install_sbsigntools_linux.yml --limit NAME
+#
+# Override package name if your distro uses a different binary package (rare):
+#   -e sbsigntools_package_name=sbsigntool
+#
+# Debian/Ubuntu: enable universe/contrib if apt reports "Unable to locate package".
+
+- name: Install sbsigntools (sbverify) on Linux
+  hosts: linux
+  gather_facts: true
+  become: true
+  become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
+
+  tasks:
+    - name: Install sbsigntools package
+      ansible.builtin.package:
+        name: "{{ sbsigntools_package_name | default('sbsigntools') }}"
+        state: present
+
+    - name: Verify sbverify is on PATH
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -lc
+          - command -v sbverify
+      register: which_sbverify
+      changed_when: false
+
+    - name: Fail if sbverify still missing after package install
+      ansible.builtin.assert:
+        that:
+          - which_sbverify.rc == 0
+        fail_msg: >-
+          sbverify not on PATH after installing {{ sbsigntools_package_name | default('sbsigntools') }}.
+          Try -e sbsigntools_package_name=... or enable the right repo (e.g. Ubuntu universe).
+
+    - name: Run sbverify --version
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -lc
+          - sbverify --version 2>&1
+      register: sbverify_version
+      changed_when: false
+
+    - name: Report sbverify availability
+      ansible.builtin.debug:
+        msg:
+          - "sbverify: {{ which_sbverify.stdout }}"
+          - "{{ sbverify_version.stdout_lines | default([]) }}"
