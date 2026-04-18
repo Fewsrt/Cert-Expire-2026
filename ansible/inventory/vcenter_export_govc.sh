@@ -56,18 +56,29 @@ vm_from_json() {
   echo "$json" | jq -c '.VirtualMachines[0]? // empty' 2>/dev/null
 }
 
+# Positional vm.info -json can return VirtualMachines: [] for /DC/vm/... paths; -vm.ipath fixes it.
+govc_fetch_vm_json() {
+  local p="$1" json="" n=0
+  case "$p" in
+    /*/*/vm/*)
+      json="$(govc vm.info -json=true -vm.ipath="$p" 2>/dev/null || true)"
+      n="$(echo "${json:-}" | jq '.VirtualMachines // [] | length' 2>/dev/null || echo 0)"
+      ;;
+  esac
+  if [[ -z "$json" || "$n" -eq 0 ]]; then
+    json="$(govc vm.info -json=true "$p" 2>/dev/null || govc vm.info -json "$p" 2>/dev/null || true)"
+  fi
+  printf '%s' "$json"
+}
+
 paths_seen=0
 rows_out=0
 while IFS= read -r vm_path; do
   [[ -z "$vm_path" ]] && continue
   paths_seen=$((paths_seen + 1))
 
-  json=""
-  if json="$(govc vm.info -json "$vm_path" 2>/dev/null)"; then
-    :
-  else
-    [[ "$DEBUG" == "1" ]] && echo "vcenter_export_govc: vm.info failed: $vm_path" >&2
-  fi
+  json="$(govc_fetch_vm_json "$vm_path")"
+  [[ "$DEBUG" == "1" && -z "$json" ]] && echo "vcenter_export_govc: empty vm.info json: $vm_path" >&2
 
   vm_json="$(vm_from_json "$json")"
   name=""

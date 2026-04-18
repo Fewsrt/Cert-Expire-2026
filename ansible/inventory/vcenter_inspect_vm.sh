@@ -35,15 +35,27 @@ govc vm.info "$VM_PATH" 2>&1 || {
 
 echo ""
 echo "=== JSON fields (inventory-relevant) ==="
-json=$(govc vm.info -json "$VM_PATH" 2>/dev/null) || {
+# Positional vm.info -json can yield VirtualMachines: [] even when text vm.info works.
+# For full inventory paths (/DC/vm/...), use -vm.ipath (see govc USAGE / vmware/govmomi issues).
+json=""
+case "$VM_PATH" in
+  /*/*/vm/*)
+    json=$(govc vm.info -json=true -vm.ipath="$VM_PATH" 2>/dev/null) || json=""
+    ;;
+esac
+n=$(printf '%s' "${json:-}" | jq -r '.VirtualMachines // [] | length' 2>/dev/null || echo 0)
+if [ -z "${json:-}" ] || [ "$n" = "0" ]; then
+  json=$(govc vm.info -json=true "$VM_PATH" 2>/dev/null) || json=$(govc vm.info -json "$VM_PATH" 2>/dev/null) || json=""
+fi
+n=$(printf '%s' "${json:-}" | jq -r '.VirtualMachines // [] | length' 2>/dev/null || echo 0)
+if [ -z "${json:-}" ]; then
   echo "govc vm.info -json failed — check path and GOVC_*" >&2
   exit 1
-}
-
-n=$(echo "$json" | jq -r '.VirtualMachines | length // 0')
+fi
 if [ "$n" = "0" ]; then
   echo "VirtualMachines is empty — path may be wrong (VMs are often under subfolders) or object is not a VM." >&2
-  echo "Try: govc find /SSGLAB_Datacenter/vm -type m | grep -i \"$(basename "$VM_PATH")\"" >&2
+  echo "Try: govc vm.info -json=true -vm.ipath=\"$VM_PATH\" | jq .VirtualMachines" >&2
+  echo "Or: govc find /SSGLAB_Datacenter/vm -type m | grep -i \"$(basename "$VM_PATH")\"" >&2
   exit 1
 fi
 
