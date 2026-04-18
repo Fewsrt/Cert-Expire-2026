@@ -85,6 +85,10 @@ def row_to_host(row: dict[str, str]) -> tuple[str, dict[str, object]]:
         "vcenter_firmware": first_value(row, ["firmware", "Firmware"]),
         "vcenter_cluster": first_value(row, ["cluster", "Cluster"]),
         "vcenter_host": first_value(row, ["esxi_host", "vmhost", "VMHost", "Host", "esxi"]),
+        "esxi_version": first_value(
+            row,
+            ["esxi_version", "vcenter_esxi_version", "esxi_build", "vmware_esxi_version", "VMHostVersion", "HostVersion", "ESXi Version"],
+        ),
     }
 
     ansible_user = first_value(row, ["ansible_user", "user", "username"])

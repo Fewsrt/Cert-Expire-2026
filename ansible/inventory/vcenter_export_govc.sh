@@ -46,7 +46,7 @@ tmp="$(mktemp)"
 cleanup() { rm -f "$tmp"; }
 trap cleanup EXIT
 
-header='check,vm_name,ansible_host,os_family,guest_os,secure_boot,firmware,cluster,esxi_host,power_state,ansible_user'
+header='check,vm_name,ansible_host,os_family,guest_os,secure_boot,firmware,cluster,esxi_host,esxi_version,power_state,ansible_user'
 printf '%s\n' "$header" >"$tmp"
 
 vm_from_json() {
@@ -122,6 +122,25 @@ govc_vm_record_from_path() {
     fi
   fi
   vm_from_object_collect "$p"
+}
+
+govc_esxi_version() {
+  local host="$1" json product full version build
+  [[ -z "$host" ]] && { echo ""; return 0; }
+  json="$(govc host.info -json "$host" 2>/dev/null || true)"
+  if [[ -n "$json" ]] && command -v jq >/dev/null 2>&1; then
+    product="$(echo "$json" | jq -r '(.HostSystems[0]? // .hostSystems[0]? // {}) | (.Config.Product // .config.product // {})' 2>/dev/null || true)"
+    full="$(echo "$product" | jq -r '.FullName // .fullName // empty' 2>/dev/null || true)"
+    version="$(echo "$product" | jq -r '.Version // .version // empty' 2>/dev/null || true)"
+    build="$(echo "$product" | jq -r '.Build // .build // empty' 2>/dev/null || true)"
+    if [[ -n "${full//[[:space:]]/}" ]]; then
+      echo "$full"
+    elif [[ -n "${version//[[:space:]]/}" && -n "${build//[[:space:]]/}" ]]; then
+      echo "ESXi ${version} build ${build}"
+    elif [[ -n "${version//[[:space:]]/}" ]]; then
+      echo "ESXi ${version}"
+    fi
+  fi
 }
 
 paths_seen=0
@@ -205,6 +224,7 @@ while IFS= read -r vm_path; do
   cluster=""
 
   esxi_host="$(govc vm.info "$vm_path" 2>/dev/null | sed -n 's/^[[:space:]]*Host:[[:space:]]*//p' | head -1 || true)"
+  esxi_version="$(govc_esxi_version "$esxi_host")"
 
   check="true"
   ansible_user=""
@@ -219,9 +239,10 @@ while IFS= read -r vm_path; do
     --arg firmware "$firmware" \
     --arg cluster "$cluster" \
     --arg esxi_host "$esxi_host" \
+    --arg esxi_version "$esxi_version" \
     --arg power_state "$power_state" \
     --arg ansible_user "$ansible_user" \
-    '[$check,$vm_name,$ansible_host,$os_family,$guest_os,$secure_boot,$firmware,$cluster,$esxi_host,$power_state,$ansible_user] | @csv' >>"$tmp"
+    '[$check,$vm_name,$ansible_host,$os_family,$guest_os,$secure_boot,$firmware,$cluster,$esxi_host,$esxi_version,$power_state,$ansible_user] | @csv' >>"$tmp"
   rows_out=$((rows_out + 1))
 # Do not hide find errors (empty CSV is often a failed find or missing GOVC_* in this shell)
 done < <(govc find "$FIND_ROOT" -type m || true)

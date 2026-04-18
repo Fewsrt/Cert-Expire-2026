@@ -117,6 +117,17 @@ try {
 
     $fw = if ($cfg.Firmware) { $cfg.Firmware } else { "unknown" }
     $esxiName = if ($vm.VMHost) { $vm.VMHost.Name } else { "" }
+    $esxiVersion = ""
+    if ($vm.VMHost) {
+      $versionText = if ($vm.VMHost.Version) { [string]$vm.VMHost.Version } else { "" }
+      $buildText = if ($vm.VMHost.Build) { [string]$vm.VMHost.Build } else { "" }
+      if (-not [string]::IsNullOrWhiteSpace($versionText) -and -not [string]::IsNullOrWhiteSpace($buildText)) {
+        $esxiVersion = "ESXi $versionText build $buildText"
+      }
+      elseif (-not [string]::IsNullOrWhiteSpace($versionText)) {
+        $esxiVersion = "ESXi $versionText"
+      }
+    }
     $power = if ($vm.PowerState) { $vm.PowerState.ToString() } else { "" }
 
     [pscustomobject] [ordered] @{
@@ -129,6 +140,7 @@ try {
       firmware      = $fw
       cluster       = ""
       esxi_host     = $esxiName
+      esxi_version  = $esxiVersion
       power_state   = $power
       ansible_user  = ""
     }

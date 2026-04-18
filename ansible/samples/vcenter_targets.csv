@@ -1,3 +1,3 @@
-check,vm_name,ansible_host,os_family,guest_os,secure_boot,firmware,cluster,esxi_host,ansible_user
-true,rhel101es8secure,rhel101es8secure,linux,RHEL 10.1,ON,EFI,Lab-Cluster,esx01.example.local,root
-false,win2022-lab01,win2022-lab01,windows,Windows Server 2022,ON,EFI,Lab-Cluster,esx01.example.local,Administrator
+check,vm_name,ansible_host,os_family,guest_os,secure_boot,firmware,cluster,esxi_host,esxi_version,ansible_user
+true,rhel101es8secure,rhel101es8secure,linux,RHEL 10.1,ON,EFI,Lab-Cluster,esx01.example.local,ESXi 8.0 build 22380479,root
+false,win2022-lab01,win2022-lab01,windows,Windows Server 2022,ON,EFI,Lab-Cluster,esx01.example.local,ESXi 8.0 build 22380479,Administrator

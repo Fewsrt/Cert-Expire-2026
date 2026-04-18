@@ -627,6 +627,44 @@
         state: directory
         mode: "0755"
 
+    - name: Read ESXi version from vCenter with govc when inventory has vcenter_host
+      ansible.builtin.shell: |
+        set -o pipefail
+        ESXI_HOST={{ hostvars[item].vcenter_host | default('') | quote }}
+        if [ -z "$ESXI_HOST" ] || ! command -v govc >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+          exit 0
+        fi
+        govc host.info -json "$ESXI_HOST" 2>/dev/null | jq -r '
+          (.HostSystems[0]? // .hostSystems[0]? // {}) |
+          (.Config.Product // .config.product // {}) as $p |
+          ($p.FullName // $p.fullName // "") as $full |
+          ($p.Version // $p.version // "") as $version |
+          ($p.Build // $p.build // "") as $build |
+          if ($full | length) > 0 then $full
+          elif (($version | length) > 0 and ($build | length) > 0) then "ESXi \($version) build \($build)"
+          elif ($version | length) > 0 then "ESXi \($version)"
+          else "" end
+        '
+      args:
+        executable: /bin/bash
+      loop: "{{ _report_hosts }}"
+      loop_control:
+        label: "{{ item }}"
+      register: esxi_version_probe
+      changed_when: false
+      failed_when: false
+      when:
+        - hostvars[item].vcenter_host | default('') | length > 0
+        - hostvars[item].esxi_version | default('', true) | length == 0
+
+    - name: Record ESXi version values read from vCenter
+      ansible.builtin.set_fact:
+        secureboot_esxi_versions: "{{ secureboot_esxi_versions | default({}) | combine({ item.item: item.stdout | trim }) }}"
+      loop: "{{ esxi_version_probe.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('unknown') }}"
+      when: item.stdout | default('') | trim | length > 0
+
     - name: Write JSON report
       ansible.builtin.copy:
         dest: "{{ report_json }}"
@@ -634,7 +672,7 @@
         content: |
           [
           {% for host in _report_hosts %}
-          {% set esxi_version = hostvars[host].esxi_version | default(hostvars[host].esxi | default('')) %}
+          {% set esxi_version = (hostvars[host].esxi_version | default('', true)) or ((secureboot_esxi_versions | default({})).get(host, '')) %}
           {% if hostvars[host].secureboot_assessment is defined %}
           {% set a = hostvars[host].secureboot_assessment %}
           {{ {'inventory_host': host, 'os_family': a.os_family | default(''), 'esxi_version': esxi_version, 'secure_boot_enabled': a.secure_boot_enabled | default(''), 'db_has_2011': a.db_has_2011 | default(''), 'db_has_2023': a.db_has_2023 | default(''), 'kek_has_2023': a.kek_has_2023 | default(''), 'dbx_readable': a.dbx_readable | default(''), 'active_bootloader_file': a.active_bootloader_file | default(''), 'active_bootloader_has_2011': a.active_bootloader_has_2011 | default(''), 'active_bootloader_has_2023': a.active_bootloader_has_2023 | default(''), 'active_bootloader_signature_method': a.active_bootloader_signature_method | default('')} | to_nice_json }}
@@ -652,7 +690,7 @@
         content: |
           inventory_host,os_family,esxi_version,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,active_bootloader_signature_method
           {% for host in _report_hosts %}
-          {% set esxi_version = hostvars[host].esxi_version | default(hostvars[host].esxi | default('')) %}
+          {% set esxi_version = (hostvars[host].esxi_version | default('', true)) or ((secureboot_esxi_versions | default({})).get(host, '')) %}
           {% set a = hostvars[host].secureboot_assessment | default({}) %}
           {% if a %}
           {{ host }},{{ a.os_family | default('') }},"{{ esxi_version | replace('"', '""') }}",{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},"{{ (a.active_bootloader_signature_method | default('')) | replace('"', '""') }}"

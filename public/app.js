@@ -435,7 +435,7 @@ function normalizeCsvReportRow(row) {
   const out = {};
   REPORT_FIELDS.forEach((field) => {
     if (field === "esxi_version") {
-      out[field] = String(row.esxi_version ?? row.esxi ?? row.esxi_build ?? row.vmware_esxi_version ?? "").trim();
+      out[field] = String(row.esxi_version ?? row.esxi_build ?? row.vmware_esxi_version ?? "").trim();
       return;
     }
     out[field] = ["secure_boot_enabled", "db_has_2011", "db_has_2023", "kek_has_2023", "dbx_readable", "active_bootloader_has_2011", "active_bootloader_has_2023"].includes(field)
@@ -509,7 +509,7 @@ function renderReportFields(fragment, result, testCase) {
   const report = getReportSource(result);
   setReportText(fragment, "inventory_host", report.inventory_host || result.vmName || testCase.id);
   setReportText(fragment, "os_family", formatOsFamily(report.os_family || testCase.os));
-  setReportText(fragment, "esxi_version", report.esxi_version || testCase.esxi);
+  setReportText(fragment, "esxi_version", report.esxi_version);
   setReportBool(fragment, "secure_boot_enabled", report.secure_boot_enabled, "secureBoot");
   setReportBool(fragment, "db_has_2011", report.db_has_2011, "cert");
   setReportBool(fragment, "db_has_2023", report.db_has_2023, "cert");
@@ -1036,7 +1036,7 @@ function renderSummaryCards() {
       <dl class="result-kv-grid">
         ${resultKvRow("inventory_host", report.inventory_host || result.vmName)}
         ${resultKvRow("os_family", formatOsFamily(report.os_family || testCase.os))}
-        ${resultKvRow("esxi_version", report.esxi_version || testCase.esxi)}
+        ${resultKvRow("esxi_version", report.esxi_version)}
         ${resultKvRow("active_bootloader_file", report.active_bootloader_file)}
         ${resultKvRow("active_bootloader_signature_method", report.active_bootloader_signature_method)}
         ${resultKvRow("อัปเดตล่าสุด", result.updatedAt ? formatDate(result.updatedAt) : "")}
