@@ -1,84 +1,14 @@
 ---
-# Install sbsigntools (provides `sbverify`) on Linux guests so secureboot_ca_assessment.yml
-# can use PKCS#7 listing instead of strings-only heuristics.
+# Standalone: install sbsigntools (sbverify) on Linux guests only.
+# Prefer: secureboot_ca_assessment.yml with -e secureboot_install_sbsigntools=true
 #
-# One host (replace NAME with inventory hostname from your CSV):
 #   cd ansible && VCENTER_CSV=/path/to.csv ansible-playbook playbooks/install_sbsigntools_linux.yml --limit NAME
-#
-# Override package name if your distro uses a different binary package:
-#   -e sbsigntools_package_name=sbsigntool
-#
-# Debian/Ubuntu: enable universe/contrib if apt reports "Unable to locate package".
 
 - name: Install sbsigntools (sbverify) on Linux
   hosts: linux
   gather_facts: true
   become: true
   become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
-
   tasks:
-    - name: Install package (explicit -e sbsigntools_package_name=...)
-      ansible.builtin.package:
-        name: "{{ sbsigntools_package_name }}"
-        state: present
-      when: sbsigntools_package_name | default('') | length > 0
-
-    - name: Debian/Ubuntu — try package sbsigntools
-      ansible.builtin.apt:
-        name: sbsigntools
-        state: present
-        update_cache: true
-      register: apt_sbsigntools
-      ignore_errors: true
-      when:
-        - sbsigntools_package_name | default('') | length == 0
-        - ansible_facts['os_family'] == 'Debian'
-
-    - name: Debian/Ubuntu — fallback package sbsigntool (common on Ubuntu)
-      ansible.builtin.apt:
-        name: sbsigntool
-        state: present
-      when:
-        - sbsigntools_package_name | default('') | length == 0
-        - ansible_facts['os_family'] == 'Debian'
-        - apt_sbsigntools is failed
-
-    - name: RHEL/SUSE/Others — package sbsigntools
-      ansible.builtin.package:
-        name: sbsigntools
-        state: present
-      when:
-        - sbsigntools_package_name | default('') | length == 0
-        - ansible_facts['os_family'] != 'Debian'
-
-    - name: Verify sbverify is on PATH
-      ansible.builtin.command:
-        argv:
-          - bash
-          - -lc
-          - command -v sbverify
-      register: which_sbverify
-      changed_when: false
-
-    - name: Fail if sbverify still missing after package install
-      ansible.builtin.assert:
-        that:
-          - which_sbverify.rc == 0
-        fail_msg: >-
-          sbverify not on PATH after install. On Ubuntu enable universe, or run with
-          -e sbsigntools_package_name=<exact package>.
-
-    - name: Run sbverify --version
-      ansible.builtin.command:
-        argv:
-          - bash
-          - -lc
-          - sbverify --version 2>&1
-      register: sbverify_version
-      changed_when: false
-
-    - name: Report sbverify availability
-      ansible.builtin.debug:
-        msg:
-          - "sbverify: {{ which_sbverify.stdout }}"
-          - "{{ sbverify_version.stdout_lines | default([]) }}"
+    - name: Install sbsigntools packages and verify sbverify
+      ansible.builtin.include_tasks: tasks/install_sbsigntools_linux_tasks.yml

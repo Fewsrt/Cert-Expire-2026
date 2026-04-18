@@ -1,0 +1,78 @@
+# Included by secureboot_ca_assessment.yml (optional) and install_sbsigntools_linux.yml.
+# Requires gather_facts (os_family) on the play.
+
+- name: Install package (explicit -e sbsigntools_package_name=...)
+  ansible.builtin.package:
+    name: "{{ sbsigntools_package_name }}"
+    state: present
+  when: sbsigntools_package_name | default('') | length > 0
+
+- name: Debian/Ubuntu — refresh apt cache (best effort)
+  ansible.builtin.apt:
+    update_cache: true
+  failed_when: false
+  changed_when: false
+  when:
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'Debian'
+
+- name: Debian/Ubuntu — try package sbsigntools
+  ansible.builtin.apt:
+    name: sbsigntools
+    state: present
+    update_cache: false
+  register: apt_sbsigntools
+  ignore_errors: true
+  when:
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'Debian'
+
+- name: Debian/Ubuntu — fallback package sbsigntool (common on Ubuntu)
+  ansible.builtin.apt:
+    name: sbsigntool
+    state: present
+    update_cache: false
+  when:
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'Debian'
+    - apt_sbsigntools is failed
+
+- name: RHEL/SUSE/Others — package sbsigntools
+  ansible.builtin.package:
+    name: sbsigntools
+    state: present
+  when:
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] != 'Debian'
+
+- name: Verify sbverify is on PATH
+  ansible.builtin.command:
+    argv:
+      - bash
+      - -lc
+      - command -v sbverify
+  register: which_sbverify
+  changed_when: false
+
+- name: Fail if sbverify still missing after package install
+  ansible.builtin.assert:
+    that:
+      - which_sbverify.rc == 0
+    fail_msg: >-
+      sbverify not on PATH after install. On Ubuntu enable universe, or run with
+      -e sbsigntools_package_name=<exact package>.
+
+- name: Run sbverify --version
+  ansible.builtin.command:
+    argv:
+      - bash
+      - -lc
+      - sbverify --version 2>&1
+  register: sbverify_version
+  changed_when: false
+
+- name: Report sbverify availability
+  ansible.builtin.debug:
+    msg:
+      - "sbverify: {{ which_sbverify.stdout }}"
+      - "{{ sbverify_version.stdout_lines | default([]) }}"

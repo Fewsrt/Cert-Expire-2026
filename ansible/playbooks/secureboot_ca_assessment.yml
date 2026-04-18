@@ -1,6 +1,10 @@
 ---
 # Not a Windows guest issue: "No module named winrm" = install pywinrm on the Ansible controller
 # (see ansible/install_controller_deps.sh). WinRM is used only from the controller.
+#
+# Optional: install sbsigntools (sbverify) on Linux guests before assessment for authoritative
+# PKCS#7 listing instead of strings-only heuristics:
+#   ansible-playbook playbooks/secureboot_ca_assessment.yml -e secureboot_install_sbsigntools=true
 
 - name: Preflight — ICMP from controller to each ansible_host (layer 3)
   hosts: localhost
@@ -33,6 +37,16 @@
   tasks:
     - name: SSH check (ping)
       ansible.builtin.ping:
+
+- name: Optional — install sbsigntools (sbverify) on Linux for bootloader PKCS7 evidence
+  hosts: linux
+  gather_facts: "{{ secureboot_install_sbsigntools | default(false) | bool }}"
+  become: true
+  become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
+  tasks:
+    - name: Install sbsigntools when secureboot_install_sbsigntools is true
+      ansible.builtin.include_tasks: tasks/install_sbsigntools_linux_tasks.yml
+      when: secureboot_install_sbsigntools | default(false) | bool
 
 - name: Assess Windows Secure Boot CA state
   hosts: windows

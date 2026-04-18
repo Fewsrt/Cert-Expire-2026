@@ -58,6 +58,12 @@ VCENTER_CSV=samples/vcenter_targets.csv ansible-inventory --list
 VCENTER_CSV=samples/vcenter_targets.csv ansible-playbook playbooks/secureboot_ca_assessment.yml
 ```
 
+Install **`sbsigntools`** (`sbverify`) on Linux guests in the same run (stronger bootloader evidence than strings-only scan):
+
+```bash
+VCENTER_CSV=../path/to/vcenter-export.csv ansible-playbook playbooks/secureboot_ca_assessment.yml -e secureboot_install_sbsigntools=true
+```
+
 ## Output Columns
 
 The CSV report includes:
