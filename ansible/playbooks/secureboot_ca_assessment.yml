@@ -282,10 +282,10 @@
               $decision = "IMPACTED"
               $rootCause = "db missing UEFI CA 2023"
               $fix = "Patch Windows, opt in, run Secure-Boot-Update, reboot twice, rerun assessment."
-          } elseif (-not $bootloaderSummary.exists) {
-          $decision = "BOOTLOADER_EFI_FILE_NOT_FOUND"
-          $rootCause = "bootmgfw.efi not found after mountvol ESP to first free letter Z..V and checking C:\Windows\Boot\EFI\bootmgfw.efi — possible: no free drive letter, BitLocker blocking ESP, deleted boot files, or non-standard Windows Boot layout."
-          $fix = "Free a drive letter for ESP, verify EFI System Partition with diskpart/bcdboot, repair Windows Boot Manager; see Microsoft docs for bcdboot / EFI recovery."
+              } elseif (-not $bootloaderSummary.exists) {
+              $decision = "BOOTLOADER_EFI_FILE_NOT_FOUND"
+              $rootCause = "bootmgfw.efi not found after mountvol ESP to first free letter Z..V and checking C:\Windows\Boot\EFI\bootmgfw.efi — possible: no free drive letter, BitLocker blocking ESP, deleted boot files, or non-standard Windows Boot layout."
+              $fix = "Free a drive letter for ESP, verify EFI System Partition with diskpart/bcdboot, repair Windows Boot Manager; see Microsoft docs for bcdboot / EFI recovery."
               } elseif ($bootloaderSummary.has_2011 -and -not $bootloaderSummary.has_2023) {
               $decision = "IMPACTED_OR_PENDING_BOOTMGR_TRANSITION"
               $rootCause = "Active bootloader chain appears to use 2011 CA only"
@@ -326,8 +326,8 @@
               "bootmgfw.efi not resolved: cannot relate policy to an on-disk boot manager file."
               } elseif ($decision -like "IMPACTED*" -or $decision -like "*PENDING*" -or $decision -like "*VENDOR*") {
               "Addresses firmware db/kek vs Authenticode chain on bootmgfw; catalog-vs-embedded Authenticode caveats apply. Indicates policy/migration gap, not a guaranteed immediate boot failure—validate after updates and reboot tests."
-          } elseif ($decision -eq "BOOTLOADER_EFI_FILE_NOT_FOUND") {
-          "bootmgfw.efi was not found at expected ESP or OS fallback paths; policy vs Authenticode chain cannot be evaluated until the file exists."
+              } elseif ($decision -eq "BOOTLOADER_EFI_FILE_NOT_FOUND") {
+              "bootmgfw.efi was not found at expected ESP or OS fallback paths; policy vs Authenticode chain cannot be evaluated until the file exists."
               } elseif ($decision -eq "PASS_OR_LOW_RISK") {
               "NVRAM + bootmgfw chain snapshot consistent with low policy concern; does not model future revocation or embedded-vs-catalog nuances without manual review."
               } else {
