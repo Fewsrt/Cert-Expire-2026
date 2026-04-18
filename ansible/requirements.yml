@@ -1,5 +1,9 @@
 ---
-# ansible-galaxy collection install -r requirements.yml
+# Collections (controller):
+#   ansible-galaxy collection install -r requirements.yml
+#
+# WinRM also needs Python packages on the controller:
+#   python3 -m pip install -r controller-pip-requirements.txt
 collections:
   - name: ansible.windows
     source: https://galaxy.ansible.com

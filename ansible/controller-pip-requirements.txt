@@ -1,0 +1,5 @@
+# Install on the Ansible controller (the machine that runs ansible-playbook), not on guests:
+#   python3 -m pip install -r controller-pip-requirements.txt
+# RHEL/alternative: dnf install python3-requests python3-winrm  (if available)
+pywinrm>=0.4.3
+requests>=2.28.0
