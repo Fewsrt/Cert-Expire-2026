@@ -271,8 +271,8 @@
   hosts: linux
   gather_facts: false
   become: true
-  # Minimal SLES images often lack sudo; su is usually present for the same ANSIBLE_PASSWORD
-  become_method: su
+  # SLES minimal images often lack sudo (use su + root password). Ubuntu/RHEL typically use sudo.
+  become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
   tasks:
     - name: Collect Linux Secure Boot DB and bootloader CA evidence
       ansible.builtin.shell:
