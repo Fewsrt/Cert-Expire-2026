@@ -8,12 +8,10 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { getFirebaseCliOAuthCredentials } from "./load-firebase-cli-oauth.mjs";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "cert-expire-2026-ca";
-
-const FIREBASE_CLI_CLIENT_ID =
-  process.env.FIREBASE_CLIENT_ID || "563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com";
-const FIREBASE_CLI_CLIENT_SECRET = process.env.FIREBASE_CLIENT_SECRET || "j9iVZfS8kkCEFUPaAeJV0sAi";
 
 async function getAccessToken() {
   const configPath =
@@ -23,8 +21,9 @@ async function getAccessToken() {
   const cfg = JSON.parse(readFileSync(configPath, "utf8"));
   const rt = cfg?.tokens?.refresh_token;
   if (!rt) throw new Error("No refresh_token");
+  const { clientId, clientSecret } = getFirebaseCliOAuthCredentials();
   const { OAuth2Client } = await import("google-auth-library");
-  const o = new OAuth2Client(FIREBASE_CLI_CLIENT_ID, FIREBASE_CLI_CLIENT_SECRET);
+  const o = new OAuth2Client(clientId, clientSecret);
   o.setCredentials({ refresh_token: rt });
   const r = await o.getAccessToken();
   return typeof r === "string" ? r : r.token;

@@ -5,7 +5,7 @@
  * Auth (first match wins):
  * 1) GOOGLE_APPLICATION_CREDENTIALS — service account JSON (firebase-admin)
  * 2) Firebase CLI login — reads ~/.config/configstore/firebase-tools.json (Windows: %USERPROFILE%\.config\...)
- *    Uses the same OAuth client id/secret as firebase-tools (overridable via FIREBASE_CLIENT_ID / FIREBASE_CLIENT_SECRET).
+ *    OAuth: set FIREBASE_CLIENT_ID / FIREBASE_CLIENT_SECRET, or rely on installed firebase-tools (see load-firebase-cli-oauth.mjs).
  */
 
 import { readFileSync, existsSync } from "node:fs";
@@ -18,15 +18,11 @@ import {
   beforeKekSelectValue,
   impactSelectValue,
 } from "./assessment-select-values.mjs";
+import { getFirebaseCliOAuthCredentials } from "./load-firebase-cli-oauth.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "cert-expire-2026-ca";
 const COLLECTION = "vmCa2023Results";
-
-/** Same defaults as firebase-tools `lib/api.js` (public OAuth client). */
-const FIREBASE_CLI_CLIENT_ID =
-  process.env.FIREBASE_CLIENT_ID || "563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com";
-const FIREBASE_CLI_CLIENT_SECRET = process.env.FIREBASE_CLIENT_SECRET || "j9iVZfS8kkCEFUPaAeJV0sAi";
 
 function mapStatus(decision) {
   const d = String(decision || "");
@@ -129,8 +125,9 @@ async function getAccessTokenFromFirebaseCli() {
   if (!refreshToken) {
     throw new Error("firebase-tools.json has no tokens.refresh_token; run: firebase login");
   }
+  const { clientId, clientSecret } = getFirebaseCliOAuthCredentials();
   const { OAuth2Client } = await import("google-auth-library");
-  const oauth2 = new OAuth2Client(FIREBASE_CLI_CLIENT_ID, FIREBASE_CLI_CLIENT_SECRET);
+  const oauth2 = new OAuth2Client(clientId, clientSecret);
   oauth2.setCredentials({ refresh_token: refreshToken });
   const r = await oauth2.getAccessToken();
   const token = typeof r === "string" ? r : r?.token;
