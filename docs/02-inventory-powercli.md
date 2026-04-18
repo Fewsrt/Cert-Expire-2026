@@ -113,6 +113,48 @@ If your CSV has **no** `check` column (older exports), use `export VCENTER_INCLU
 
 ---
 
+## Inspect one VM (before full export)
+
+Use this to confirm **GuestId**, **GuestFullName**, **firmware**, **Secure Boot**, and **IP** for a single VM — same fields the export scripts rely on.
+
+### Linux / govc
+
+Find the inventory path (once per VM name):
+
+```bash
+govc find /SSGLAB_Datacenter/vm -type m | grep -i 'SL-6-17$'
+```
+
+Then (set `GOVC_*` the same as for export):
+
+```bash
+chmod +x inventory/vcenter_inspect_vm.sh
+./inventory/vcenter_inspect_vm.sh /SSGLAB_Datacenter/vm/SL-6-17
+```
+
+One-liner equivalent:
+
+```bash
+govc vm.info -json /SSGLAB_Datacenter/vm/SL-6-17 | jq '.VirtualMachines[0] | {Name, GuestId: .Config.GuestId, GuestFullName: .Guest.GuestFullName, Firmware: .Config.Firmware, EfiSecureBoot: .Config.BootOptions.EfiSecureBootEnabled, PowerState: .Runtime.PowerState}'
+govc vm.ip -esxi=false -wait=0 /SSGLAB_Datacenter/vm/SL-6-17
+```
+
+### Windows / PowerCLI
+
+After `Connect-VIServer`:
+
+```powershell
+$vm = Get-VM -Name "SL-6-17"
+$vm | Select-Object Name, PowerState, Version,
+  @{N='GuestId';E={$_.ExtensionData.Config.GuestId}},
+  @{N='GuestFullName';E={$_.ExtensionData.Guest.GuestFullName}},
+  @{N='Firmware';E={$_.ExtensionData.Config.Firmware}},
+  @{N='EfiSecureBoot';E={$_.ExtensionData.Config.BootOptions.EfiSecureBootEnabled}}
+$vm.Guest.IPAddress
+```
+
+---
+
 ## After export (both paths)
 
 - **Narrow scope:** Edit the CSV so only VMs you want assessed have `check=true`, or use a smaller file and set `VCENTER_CSV` accordingly.
@@ -125,6 +167,7 @@ If your CSV has **no** `check` column (older exports), use `export VCENTER_INCLU
 | Artifact | Role |
 |----------|------|
 | `ansible/inventory/vcenter_export_govc.sh` | vCenter → CSV (govc; Path B) |
+| `ansible/inventory/vcenter_inspect_vm.sh` | Debug one VM (`govc vm.info` + `jq` + `vm.ip`) |
 | `ansible/inventory/vcenter_export_powercli.ps1` | vCenter → CSV (PowerCLI; Path A) |
 | `ansible/inventory/vcenter_csv_inventory.sh` | Run dynamic inventory CLI on Linux/macOS (`python3` → `vcenter_csv_inventory.py`) |
 | `ansible/inventory/vcenter_csv_inventory.py` | Column aliases and `VCENTER_*` variables |
