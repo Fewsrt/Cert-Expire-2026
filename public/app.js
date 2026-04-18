@@ -162,6 +162,25 @@ function wireEvents() {
   });
 }
 
+/**
+ * Ansible sync writes ansibleAssessment / ansibleAssessments. Merge these back in when the user
+ * saves the manual form so we do not strip them from memory, localStorage, or the next Firestore write.
+ */
+function pickPreservedAnsibleFields(previous) {
+  if (!previous || typeof previous !== "object") return {};
+  const out = {};
+  if (Array.isArray(previous.ansibleAssessments) && previous.ansibleAssessments.length) {
+    out.ansibleAssessments = previous.ansibleAssessments;
+  }
+  if (previous.ansibleAssessment && typeof previous.ansibleAssessment === "object") {
+    out.ansibleAssessment = previous.ansibleAssessment;
+  }
+  if (Array.isArray(previous.ansibleVmDetails) && previous.ansibleVmDetails.length) {
+    out.ansibleVmDetails = previous.ansibleVmDetails;
+  }
+  return out;
+}
+
 function render() {
   const visibleCases = filterCases();
   elements.list.innerHTML = "";
@@ -224,6 +243,7 @@ function renderCase(testCase) {
   fillCommands(fragment.querySelector(".commands"), getCaseCommands(testCase), testCase);
 
   const form = fragment.querySelector(".result-form");
+
   Object.entries(result).forEach(([key, value]) => {
     const field = form.elements[key];
     if (field && field.type !== "file") field.value = value || "";
@@ -241,6 +261,7 @@ function renderCase(testCase) {
     const uploadedImages = await uploadEvidenceImages(testCase.id, files);
     const existingImages = result.evidenceImages || [];
     const nextResult = {
+      ...pickPreservedAnsibleFields(result),
       caseId: testCase.id,
       caseTitle: testCase.title,
       section: testCase.section,
@@ -682,6 +703,15 @@ function filterCases() {
   return cases.filter((testCase) => {
     const result = results[testCase.id] || defaultResult();
     const matchesFilter = activeFilter === "all" || result.status === activeFilter;
+    const ansibleHosts = getAnsibleAssessmentsList(result)
+      .map((r) => `${r.inventory_host || ""} ${r.host || ""} ${r.decision || ""}`)
+      .join(" ");
+    const ansibleVmText = getAnsibleVmDetailsList(result)
+      .map(
+        (r) =>
+          `${r.active_bootloader_file || ""} ${r.ca2023_alignment || ""} ${r.ca2023_summary || ""}`
+      )
+      .join(" ");
     const haystack = [
       testCase.id,
       testCase.section,
@@ -692,7 +722,10 @@ function filterCases() {
       result.vmName,
       result.owner,
       result.rootCause,
-      result.notes
+      result.notes,
+      result.events,
+      ansibleHosts,
+      ansibleVmText
     ].join(" ").toLowerCase();
     return matchesFilter && (!searchTerm || haystack.includes(searchTerm));
   });
@@ -791,6 +824,40 @@ function renderKeyFindings(summary) {
   });
 }
 
+/** Prefer top-level ansibleVmDetails[] from Firestore; else derive from ansibleAssessments. */
+function getAnsibleVmDetailsList(result) {
+  if (Array.isArray(result.ansibleVmDetails) && result.ansibleVmDetails.length) {
+    return result.ansibleVmDetails.map(normalizeVmDetailRow);
+  }
+  return getAnsibleAssessmentsList(result).map(vmDetailFromAssessment);
+}
+
+function vmDetailFromAssessment(r) {
+  return normalizeVmDetailRow({
+    inventory_host: r.inventory_host || r.host,
+    active_bootloader_file: r.active_bootloader_file,
+    active_bootloader_has_2011: r.active_bootloader_has_2011,
+    active_bootloader_has_2023: r.active_bootloader_has_2023,
+    ca2023_alignment: r.ca2023_alignment,
+    ca2023_summary: r.ca2023_summary
+  });
+}
+
+function normalizeVmDetailRow(row) {
+  const host = String(row.inventory_host || "").trim();
+  const file = row.active_bootloader_file != null ? String(row.active_bootloader_file).trim() : "";
+  const align = row.ca2023_alignment != null ? String(row.ca2023_alignment).trim() : "";
+  const summ = row.ca2023_summary != null ? String(row.ca2023_summary).trim() : "";
+  return {
+    inventory_host: host || "—",
+    active_bootloader_file: file || "—",
+    active_bootloader_has_2011: !!row.active_bootloader_has_2011,
+    active_bootloader_has_2023: !!row.active_bootloader_has_2023,
+    ca2023_alignment: align || "—",
+    ca2023_summary: summ || "—"
+  };
+}
+
 function renderSummaryCards() {
   const orderedCases = [...cases].sort((a, b) => {
     const aResult = results[a.id] || defaultResult();
@@ -802,19 +869,58 @@ function renderSummaryCards() {
   orderedCases.forEach((testCase) => {
     const result = results[testCase.id] || defaultResult();
     const card = document.createElement("article");
-    card.className = "summary-mini-card";
+    card.className = "result-summary-card";
     const badgeClass = result.impact === "yes" ? "impact" : result.status;
+
     card.innerHTML = `
-      <p class="case-id">Test ${escapeHtml(testCase.id)} · ${escapeHtml(testCase.section)}</p>
-      <span class="badge ${escapeHtml(badgeClass || "pending")}">${escapeHtml(statusLabels[result.status] || statusLabels.pending)}</span>
-      <h4>${escapeHtml(testCase.title)}</h4>
-      <p>Impact: ${escapeHtml(result.impact || "ยังไม่สรุป")}</p>
-      <p>VM: ${escapeHtml(result.vmName || "-")}</p>
-      <p>Root cause: ${escapeHtml(result.rootCause || "-")}</p>
-      <p>Updated: ${escapeHtml(result.updatedAt ? formatDate(result.updatedAt) : "-")}</p>
+      <header class="result-card-head">
+        <div class="result-card-titles">
+          <p class="case-id">Test ${escapeHtml(testCase.id)} · ${escapeHtml(testCase.section)}</p>
+          <h4>${escapeHtml(testCase.title)}</h4>
+        </div>
+        <span class="badge ${escapeHtml(badgeClass || "pending")}">${escapeHtml(statusLabels[result.status] || statusLabels.pending)}</span>
+      </header>
+      <div class="result-chip-strip" aria-label="สรุปผลหลัก">
+        ${resultChipHtml("ก่อน CA 2023", formatTriStateDisplay(result.beforeCa))}
+        ${resultChipHtml("ก่อน KEK 2023", formatTriStateDisplay(result.beforeKek))}
+        ${resultChipHtml("หลัง CA", formatTriStateDisplay(result.afterCa))}
+        ${resultChipHtml("หลัง KEK", formatTriStateDisplay(result.afterKek))}
+        ${resultChipHtml("Impact", formatImpactDisplay(result.impact))}
+      </div>
+      <dl class="result-kv-grid">
+        ${resultKvRow("VM", result.vmName)}
+        ${resultKvRow("ESXi build", result.esxiBuild)}
+        ${resultKvRow("Owner", result.owner)}
+        ${resultKvRow("อัปเดตล่าสุด", result.updatedAt ? formatDate(result.updatedAt) : "")}
+      </dl>
+      <div class="result-details-stack">
+        <details class="result-block">
+          <summary>เหตุการณ์ / Event log</summary>
+          <pre class="result-pre">${blockText(result.events)}</pre>
+        </details>
+        <details class="result-block">
+          <summary>สาเหตุ &amp; Remediation ที่ใช้จริง</summary>
+          <div class="result-subblocks">
+            <p class="result-inline-label">Root cause</p>
+            <pre class="result-pre result-pre--tight">${blockText(result.rootCause)}</pre>
+            <p class="result-inline-label">Remediation</p>
+            <pre class="result-pre result-pre--tight">${blockText(result.actualRemediation)}</pre>
+          </div>
+        </details>
+        <details class="result-block">
+          <summary>หมายเหตุ / Notes</summary>
+          <pre class="result-pre">${blockText(result.notes)}</pre>
+        </details>
+      </div>
     `;
-    const images = (result.evidenceImages || []).slice(0, 4);
+
+    const images = (result.evidenceImages || []).slice(0, 8);
     if (images.length) {
+      const wrap = document.createElement("div");
+      wrap.className = "result-evidence-wrap";
+      const label = document.createElement("p");
+      label.className = "result-evidence-label";
+      label.textContent = "Evidence images";
       const row = document.createElement("div");
       row.className = "summary-thumb-row";
       images.forEach((image) => {
@@ -825,10 +931,54 @@ function renderSummaryCards() {
         button.addEventListener("click", () => openImageModal(image));
         row.appendChild(button);
       });
-      card.appendChild(row);
+      wrap.appendChild(label);
+      wrap.appendChild(row);
+      card.appendChild(wrap);
     }
+
     elements.summaryCaseCards.appendChild(card);
   });
+}
+
+function getAnsibleAssessmentsList(result) {
+  if (Array.isArray(result.ansibleAssessments) && result.ansibleAssessments.length) {
+    return result.ansibleAssessments;
+  }
+  if (result.ansibleAssessment && typeof result.ansibleAssessment === "object") {
+    return [result.ansibleAssessment];
+  }
+  return [];
+}
+
+function formatTriStateDisplay(value) {
+  const v = value === true ? "true" : value === false ? "false" : String(value ?? "").trim();
+  const map = {
+    true: "มี (True)",
+    false: "ไม่มี (False)",
+    na: "N/A",
+    "": "—"
+  };
+  return map[v] ?? (v ? v : "—");
+}
+
+function formatImpactDisplay(value) {
+  if (value === "yes") return "Yes — มีผลกระทบ";
+  if (value === "no") return "No";
+  return "ยังไม่สรุป";
+}
+
+function resultChipHtml(label, value) {
+  return `<span class="result-chip"><span class="result-chip-label">${escapeHtml(label)}</span> ${escapeHtml(value)}</span>`;
+}
+
+function resultKvRow(label, value) {
+  const display = value && String(value).trim() ? String(value) : "—";
+  return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(display)}</dd>`;
+}
+
+function blockText(value) {
+  if (value == null || value === "") return escapeHtml("—");
+  return escapeHtml(String(value));
 }
 
 function statusWeight(result) {
@@ -1163,6 +1313,7 @@ function defaultResult() {
     actualRemediation: "",
     notes: "",
     evidenceImages: [],
+    ansibleVmDetails: [],
     updatedAt: ""
   };
 }

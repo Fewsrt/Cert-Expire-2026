@@ -9,15 +9,6 @@
   </head>
   <body>
     <main class="app-shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Secure Boot CA 2023</p>
-          <h1>VM Test Tracker</h1>
-          <p class="lead">ติดตามผลทดสอบ CA, KEK, db, dbx ตามคู่ Guest OS + ESXi และบันทึกสถานะลง Firestore</p>
-        </div>
-        <img class="topbar-image" src="https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=640&q=80" alt="server monitoring dashboard">
-      </header>
-
       <nav class="app-nav" aria-label="main views">
         <button class="nav-tab active" data-view="tests" type="button">Test Cases</button>
         <button class="nav-tab" data-view="summary" type="button">Summary</button>
@@ -240,6 +231,7 @@
         </div>
 
         <div class="case-meta"></div>
+
         <div class="case-details">
           <details>
             <summary>Commands / Steps / Expected / Remediation</summary>
@@ -262,97 +254,132 @@
           </details>
         </div>
 
-        <form class="result-form">
-          <label>
-            สถานะ
-            <select name="status">
-              <option value="pending">ยังไม่เริ่ม</option>
-              <option value="in-progress">กำลังทดสอบ</option>
-              <option value="pass">ผ่าน</option>
-              <option value="fail">ไม่ผ่าน</option>
-              <option value="exception">Exception</option>
-            </select>
-          </label>
-          <label>
-            VM name
-            <input name="vmName" type="text" placeholder="เช่น LAB-WS2022-ESX8">
-          </label>
-          <label>
-            ESXi build
-            <input name="esxiBuild" type="text" placeholder="เช่น 8.0.3 build ...">
-          </label>
-          <label>
-            Owner
-            <input name="owner" type="text" placeholder="คนรับผิดชอบ">
-          </label>
-          <label>
-            Before CA 2023
-            <select name="beforeCa">
-              <option value="">ยังไม่ตรวจ</option>
-              <option value="true">True</option>
-              <option value="false">False</option>
-              <option value="na">N/A</option>
-            </select>
-          </label>
-          <label>
-            Before KEK 2023
-            <select name="beforeKek">
-              <option value="">ยังไม่ตรวจ</option>
-              <option value="true">True</option>
-              <option value="false">False</option>
-              <option value="na">N/A</option>
-            </select>
-          </label>
-          <label>
-            After CA 2023
-            <select name="afterCa">
-              <option value="">ยังไม่ตรวจ</option>
-              <option value="true">True</option>
-              <option value="false">False</option>
-              <option value="na">N/A</option>
-            </select>
-          </label>
-          <label>
-            After KEK 2023
-            <select name="afterKek">
-              <option value="">ยังไม่ตรวจ</option>
-              <option value="true">True</option>
-              <option value="false">False</option>
-              <option value="na">N/A</option>
-            </select>
-          </label>
-          <label>
-            Event IDs
-            <input name="events" type="text" placeholder="เช่น 1808 หรือ 1795,1796">
-          </label>
-          <label>
-            Impact
-            <select name="impact">
-              <option value="">ยังไม่สรุป</option>
-              <option value="no">No</option>
-              <option value="yes">Yes</option>
-            </select>
-          </label>
-          <label class="wide">
-            Root cause
-            <input name="rootCause" type="text" placeholder="เช่น missing KEK, PK invalid, NVRAM persistence">
-          </label>
-          <label class="wide">
-            Remediation ที่ใช้จริง
-            <textarea name="actualRemediation" rows="3" placeholder="ใส่วิธีแก้ที่ทำจริง"></textarea>
-          </label>
-          <label class="wide">
-            Evidence / note
-            <textarea name="notes" rows="3" placeholder="ผล command, link evidence, screenshot path"></textarea>
-          </label>
-          <label class="wide">
-            แนบรูป evidence
-            <input name="evidenceImages" type="file" accept="image/*" multiple>
-          </label>
-          <div class="wide evidence-gallery"></div>
+        <form class="result-form tracker-form">
+          <div class="tracker-form-intro">
+            <h3 class="tracker-form-title">บันทึกใน Tracker</h3>
+            <p class="tracker-form-lead">
+              บันทึกผลทดสอบและหลักฐานลง Firestore จากฟอร์มด้านล่าง
+            </p>
+          </div>
+
+          <fieldset class="form-fieldset">
+            <legend>สถานะ &amp; VM</legend>
+            <div class="fieldset-grid fieldset-grid--4">
+              <label>
+                สถานะทดสอบ
+                <select name="status">
+                  <option value="pending">ยังไม่เริ่ม</option>
+                  <option value="in-progress">กำลังทดสอบ</option>
+                  <option value="pass">ผ่าน</option>
+                  <option value="fail">ไม่ผ่าน</option>
+                  <option value="exception">Exception</option>
+                </select>
+              </label>
+              <label>
+                VM name
+                <input name="vmName" type="text" placeholder="ชื่อ VM หลายเครื่องคั่นด้วย comma">
+              </label>
+              <label>
+                ESXi build
+                <input name="esxiBuild" type="text" placeholder="เช่น 8.0.3">
+              </label>
+              <label>
+                Owner
+                <input name="owner" type="text" placeholder="ผู้รับผิดชอบ">
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="form-fieldset">
+            <legend>ก่อน / หลัง — CA 2023 &amp; KEK 2023</legend>
+            <p class="fieldset-hint">ค่าเดียวกับที่ใช้สรุปผลทดสอบ (True/False/N/A)</p>
+            <div class="fieldset-grid fieldset-grid--4">
+              <label>
+                ก่อน CA 2023
+                <select name="beforeCa">
+                  <option value="">ยังไม่ตรวจ</option>
+                  <option value="true">True</option>
+                  <option value="false">False</option>
+                  <option value="na">N/A</option>
+                </select>
+              </label>
+              <label>
+                ก่อน KEK 2023
+                <select name="beforeKek">
+                  <option value="">ยังไม่ตรวจ</option>
+                  <option value="true">True</option>
+                  <option value="false">False</option>
+                  <option value="na">N/A</option>
+                </select>
+              </label>
+              <label>
+                หลัง CA 2023
+                <select name="afterCa">
+                  <option value="">ยังไม่ตรวจ</option>
+                  <option value="true">True</option>
+                  <option value="false">False</option>
+                  <option value="na">N/A</option>
+                </select>
+              </label>
+              <label>
+                หลัง KEK 2023
+                <select name="afterKek">
+                  <option value="">ยังไม่ตรวจ</option>
+                  <option value="true">True</option>
+                  <option value="false">False</option>
+                  <option value="na">N/A</option>
+                </select>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="form-fieldset">
+            <legend>Impact &amp; Event log</legend>
+            <div class="fieldset-grid fieldset-grid--2">
+              <label>
+                Impact
+                <select name="impact">
+                  <option value="">ยังไม่สรุป</option>
+                  <option value="no">No</option>
+                  <option value="yes">Yes</option>
+                </select>
+              </label>
+              <label class="wide-merge">
+                Event log / Event IDs
+                <textarea name="events" rows="4" placeholder="Event IDs หรือบันทึกจากระบบ"></textarea>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="form-fieldset">
+            <legend>สาเหตุ · แก้ไขจริง · หมายเหตุ</legend>
+            <div class="fieldset-stack">
+              <label>
+                Root cause
+                <textarea name="rootCause" rows="2" placeholder="สาเหตุที่พบ"></textarea>
+              </label>
+              <label>
+                Remediation ที่ใช้จริง
+                <textarea name="actualRemediation" rows="2" placeholder="สิ่งที่ทำจริงหลังทดสอบ"></textarea>
+              </label>
+              <label>
+                หมายเหตุ / evidence text
+                <textarea name="notes" rows="2" placeholder="ลิงก์ รูป path หมายเหตุเพิ่มเติม"></textarea>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="form-fieldset">
+            <legend>แนบรูป evidence</legend>
+            <label class="evidence-file-label">
+              <input name="evidenceImages" type="file" accept="image/*" multiple>
+            </label>
+            <div class="evidence-gallery"></div>
+          </fieldset>
+
           <div class="form-footer">
             <small class="updated-at">ยังไม่บันทึก</small>
-            <button type="submit">บันทึกผล</button>
+            <button type="submit">บันทึกลง Tracker</button>
           </div>
         </form>
       </article>

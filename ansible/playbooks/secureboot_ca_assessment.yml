@@ -343,37 +343,72 @@
 
           def _host_path_from_boot_description(desc):
             if not desc:
-                return ""
+              return ""
             m = re.search(r"File\\(([^)]+)\\)", desc, re.I)
             inner = m.group(1).strip() if m else ""
             if not inner:
-                m2 = re.search(r"(?:\\\\|/)EFI(?:\\\\|/).+?\\.efi", desc, re.I)
-                inner = m2.group(0) if m2 else ""
+              m2 = re.search(r"([\\/]EFI[\\/].+\.efi)", desc, re.I)
+              inner = (m2.group(1).strip() if m2 else "")
             if not inner:
-                return ""
+              m3 = re.search(r"EFI[\\/].+\.efi", desc, re.I)
+              inner = (m3.group(0).strip() if m3 else "")
+            if not inner:
+              return ""
             inner = inner.replace(chr(92), "/")
             if not inner.startswith("/"):
-                inner = "/" + inner.lstrip("/")
+              inner = "/" + inner.lstrip("/")
             if inner.upper().startswith("/EFI"):
-                return "/boot/efi" + inner
+              return "/boot/efi" + inner
             if inner.upper().startswith("EFI/"):
-                return "/boot/efi/" + inner
+              return "/boot/efi/" + inner
             return ""
 
-          def active_efi_from_efibootmgr(text):
-            current = _boot_current_hex(text)
-            if not current:
-                return "", ""
-            line_pat = re.compile(rf"^Boot{current}\\*?\\s+(.*)$", re.I)
+          def _first_bootorder_hex(text):
             for line in text.splitlines():
-                ls = line.strip()
-                m = line_pat.match(ls)
-                if not m:
-                    continue
-                desc = m.group(1)
-                host_path = _host_path_from_boot_description(desc)
-                if host_path:
-                    return host_path, desc
+              ls = line.strip()
+              if not ls.lower().startswith("bootorder:"):
+                continue
+              rest = ls.split(":", 1)[1].strip()
+              if not rest:
+                return ""
+              first = rest.split(",")[0].strip()
+              val = first
+              if val.lower().startswith("0x"):
+                val = val[2:]
+              try:
+                num = int(val, 16)
+              except ValueError:
+                try:
+                  num = int(val, 10)
+                except ValueError:
+                  return ""
+              return f"{num:04X}"
+            return ""
+
+          def _resolve_boot_entry(text, boot_hex):
+            if not boot_hex:
+              return "", ""
+            line_pat = re.compile(rf"^Boot{boot_hex}\\*?\\s+(.*)$", re.I)
+            for line in text.splitlines():
+              ls = line.strip()
+              m = line_pat.match(ls)
+              if not m:
+                continue
+              desc = m.group(1)
+              host_path = _host_path_from_boot_description(desc)
+              if host_path:
+                return host_path, desc
+            return "", ""
+
+          def active_efi_from_efibootmgr(text):
+            seen = []
+            for hx in (_boot_current_hex(text), _first_bootorder_hex(text)):
+              if not hx or hx in seen:
+                continue
+              seen.append(hx)
+              hp, d = _resolve_boot_entry(text, hx)
+              if hp:
+                return hp, d
             return "", ""
 
           def fallback_efi_bootloader():
@@ -410,9 +445,16 @@
 
           sb_state = run("mokutil --sb-state 2>&1")
           efibootmgr = run("efibootmgr -v 2>&1")
+          if not efibootmgr.strip() or "not supported" in efibootmgr.lower():
+            efibootmgr = run("efibootmgr 2>&1") + chr(10) + run("efibootmgr -v 2>&1")
           active_file, active_raw = active_efi_from_efibootmgr(efibootmgr)
+          resolve_method = "efibootmgr"
           if not active_file:
             active_file, active_raw = fallback_efi_bootloader()
+            if active_file:
+              resolve_method = "fallback_esp_glob"
+            else:
+              resolve_method = "unresolved"
           efi_files = sorted(glob.glob("/boot/efi/EFI/**/*.efi", recursive=True))
           active_sig = signature(active_file)
           variables = {name: sb_var(name) for name in ["pk", "kek", "db", "dbx"]}
@@ -500,6 +542,7 @@
             "dbx_readable": bool(dbx["readable"]),
             "active_bootloader_file": active_file,
             "active_bootloader_raw": active_raw,
+            "active_bootloader_resolve_method": resolve_method,
             "active_bootloader_owner": owner,
             "active_bootloader_has_2011": bool(active_sig["has_2011"]),
             "active_bootloader_has_2023": bool(active_sig["has_2023"]),
@@ -508,6 +551,7 @@
             "active_bootloader_signature_text": active_sig["text"],
             "efi_files": efi_files,
             "package_versions": package_versions,
+            "efibootmgr_raw": efibootmgr[:32000],
             "variables": variables,
             "decision": decision,
             "root_cause": root_cause,
