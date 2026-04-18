@@ -26,6 +26,23 @@ python_from_shebang() {
   return 0
 }
 
+# Some Python builds (e.g. /usr/bin/python3.12) ship without the pip module — bootstrap via ensurepip
+# or install the OS package: dnf install python3.12-pip (if policy allows).
+ensure_pip() {
+  py="$1"
+  if "$py" -m pip --version >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "ensurepip: bootstrapping pip for $py ..." >&2
+  if "$py" -m ensurepip --user --default-pip >/dev/null 2>&1; then
+    return 0
+  fi
+  if "$py" -m ensurepip --default-pip >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
 # Unique interpreters: ansible-playbook shebang + common RHEL paths
 seen=""
 add_py() {
@@ -33,6 +50,11 @@ add_py() {
   case " $seen " in *" $py "*) return ;; esac
   if [ -z "$py" ] || [ ! -x "$py" ]; then
     return
+  fi
+  if ! ensure_pip "$py"; then
+    echo "install_controller_deps: skipping $py — no pip. Try: $py -m ensurepip --user --default-pip" >&2
+    echo "  or (RHEL) dnf install python3.12-pip / python3-pip via foreman-maintain if dnf is locked." >&2
+    return 0
   fi
   seen="$seen $py"
   echo "pip install -> $py" >&2

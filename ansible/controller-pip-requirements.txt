@@ -18,5 +18,9 @@
 # No pip at all — try bootstrap (if allowed):
 #   python3 -m ensurepip --user
 #   ~/.local/bin/pip install --user -r controller-pip-requirements.txt
+#
+# Ansible uses /usr/bin/python3.12 on some RHEL: if `python3.12: No module named pip`, either:
+#   /usr/bin/python3.12 -m ensurepip --user --default-pip
+#   dnf install python3.12-pip   # or foreman-maintain packages install python3.12-pip
 pywinrm>=0.4.3
 requests>=2.28.0
