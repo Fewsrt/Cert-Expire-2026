@@ -13,8 +13,15 @@ python_from_shebang() {
   [ -n "$f" ] && [ -r "$f" ] || return 0
   line="$(sed -n '1s/^#!//p' "$f" | tr -d '\r' | head -1)"
   case "$line" in
-    */python*|*/platform-python*) [ -x "$line" ] && echo "$line" ;;
+    */python*|*/platform-python*)
+      if [ -x "$line" ]; then
+        echo "$line"
+      fi
+      ;;
   esac
+  # Required: with `set -e`, a failed `[ -x ... ]` inside `case` would make the function
+  # return non-zero and abort the script at: sh_py="$(python_from_shebang ...)"
+  return 0
 }
 
 # Unique interpreters: ansible-playbook shebang + common RHEL paths
