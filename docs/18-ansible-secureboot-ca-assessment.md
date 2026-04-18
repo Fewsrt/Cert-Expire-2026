@@ -58,11 +58,41 @@ VCENTER_CSV=samples/vcenter_targets.csv ansible-inventory --list
 VCENTER_CSV=samples/vcenter_targets.csv ansible-playbook playbooks/secureboot_ca_assessment.yml
 ```
 
-Install **`sbsigntools`** (`sbverify`) on Linux guests in the same run (stronger bootloader evidence than strings-only scan):
+Install **`sbsigntools`** (`sbverify`) on Linux guests in the same run (required for PKCS#7-based bootloader flags on Linux — see **Prerequisites and verification** below):
 
 ```bash
 VCENTER_CSV=../path/to/vcenter-export.csv ansible-playbook playbooks/secureboot_ca_assessment.yml -e secureboot_install_sbsigntools=true
 ```
+
+## Prerequisites and verification (by OS)
+
+This section summarizes **what the playbook uses**, **what you may need to install**, and **how to double-check manually**. Official references are linked.
+
+### Linux (guest)
+
+| What is measured | Tool in guest | Typical packages / notes |
+|---|---|---|
+| Firmware variables (`db`, `KEK`, …) | `mokutil` | Usually preinstalled (`mokutil` package). |
+| Active EFI binary — PKCS#7 listing | `sbverify --list` | **`sbsigntools`** (provides `sbverify`). This is what drives `active_bootloader_has_*` on Linux. |
+
+**Install `sbverify` by distribution (manual checks):**
+
+- **Debian / Ubuntu:** Package name is often **`sbsigntool`** or **`sbsigntools`**; **Ubuntu** may need the **universe** component enabled. Then: `sudo apt update && sudo apt install -y sbsigntool` (or `sbsigntools`). Verify: `command -v sbverify` and `sbverify --list /boot/efi/.../shim*.efi`.
+- **Red Hat Enterprise Linux:** `sbsigntools` is commonly shipped via **CodeReady Builder (CRB)** (repo id like `codeready-builder-for-rhel-9-x86_64-rpms`) or via **EPEL**. Enable CRB (example RHEL 9 x86_64): `sudo subscription-manager repos --enable codeready-builder-for-rhel-9-x86_64-rpms` (or `sudo dnf config-manager --set-enabled crb` where available), then `sudo dnf install -y sbsigntools`. If the package is still missing, install EPEL per [Fedora EPEL](https://docs.fedoraproject.org/en-US/epel/) and retry. Red Hat’s signing workflows for custom kernels/modules use **`pesign`**, **`mokutil`**, etc.; see [RHEL — Signing a kernel and modules for Secure Boot](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/managing_monitoring_and_updating_the_kernel/signing-a-kernel-and-modules-for-secure-boot_managing-monitoring-and-updating-the-kernel) for that context (the playbook’s **read-only** check uses **`sbverify`** on vendor shim/GRUB paths, not `pesign`).
+- **SUSE Linux Enterprise / openSUSE:** `sudo zypper install -y sbsigntools` (name may vary; `zypper search sbverify`).
+
+Upstream tooling for UEFI PE signatures: **sbsigntools** ([Fedora package overview](https://packages.fedoraproject.org/pkgs/sbsigntools/sbsigntools/)).
+
+### Windows (guest)
+
+| What is measured | Mechanism | Extra install? |
+|---|---|---|
+| Firmware variables | `Get-SecureBootUEFI` | None — built into Windows PowerShell for this assessment path. |
+| `bootmgfw.efi` certificate chain | `Get-AuthenticodeSignature` and `X509Chain` in PowerShell | None — standard Windows PowerShell modules. |
+
+**Important limitation (Microsoft documentation):** `Get-AuthenticodeSignature` returns information about the Authenticode signature; if a file is both **embedded-signed** and **catalog-signed**, **the catalog signature may be preferred** for display purposes. That can make **bootloader** inspection on Windows subtly different from what the firmware actually uses for UEFI Secure Boot (which relies on **embedded** signatures on the EFI binary). See [Get-AuthenticodeSignature (Microsoft Learn)](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.security/get-authenticodesignature?view=powershell-7.4) and discussion in [PowerShell issue #23820](https://github.com/PowerShell/PowerShell/issues/23820). For a **manual** cross-check of embedded signature details, operators sometimes use **Sysinternals Sigcheck** (`sigcheck -i`) on a copy of the EFI file, or inspect **Properties → Digital Signatures** on the file when copied off the ESP.
+
+The playbook still records `active_bootloader_signature_method = windows_authenticode` for traceability.
 
 ## Output Columns
 
@@ -97,7 +127,7 @@ If the ESP path cannot be mounted/found, it falls back to:
 C:\Windows\Boot\EFI\bootmgfw.efi
 ```
 
-The certificate chain is read with `Get-AuthenticodeSignature` and `X509Chain`.
+The certificate chain is read with `Get-AuthenticodeSignature` and `X509Chain`. See **Prerequisites and verification → Windows** for catalog vs embedded signature caveats.
 
 ### Linux
 
@@ -126,6 +156,6 @@ Active file:
 | `kek_has_2023=false` on Windows | Same as above; if VMware still fails, check PK or regenerate NVRAM |
 | Windows bootloader has 2011 only | After CA/KEK 2023 are present, install latest CU, trigger task, reboot twice |
 | Linux active bootloader unowned | Reinstall/update vendor shim/GRUB packages and recreate EFI boot entry |
-| Linux `sbverify` missing | Install `sbsigntools`, rerun assessment |
+| Linux `sbverify` missing | Install **`sbsigntools`** (enable **CRB** and/or **EPEL** on RHEL if needed; **universe** on Ubuntu), then rerun assessment |
 | Linux bootloader has 2011 only | Update vendor shim/GRUB/kernel packages, reboot twice, rerun assessment |
 | Linux cannot boot with Secure Boot | Temporarily disable Secure Boot, boot OS, update boot chain, re-enable Secure Boot, rerun assessment |

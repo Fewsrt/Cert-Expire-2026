@@ -48,6 +48,8 @@
       ansible.builtin.include_tasks: tasks/install_sbsigntools_linux_tasks.yml
       when: secureboot_install_sbsigntools | default(false) | bool
 
+# Windows: Get-SecureBootUEFI for NVRAM vars; bootmgfw chain via Get-AuthenticodeSignature + X509Chain.
+# See docs/18-ansible-secureboot-ca-assessment.md — Get-AuthenticodeSignature may prefer catalog over embedded sigs.
 - name: Assess Windows Secure Boot CA state
   hosts: windows
   gather_facts: false
@@ -282,6 +284,7 @@
       ansible.builtin.set_fact:
         secureboot_assessment: "{{ windows_assessment_raw.stdout | from_json }}"
 
+# Linux: mokutil for firmware vars; active bootloader flags only from sbverify --list (install sbsigntools). See docs/18.
 - name: Assess Linux Secure Boot CA state
   hosts: linux
   gather_facts: false

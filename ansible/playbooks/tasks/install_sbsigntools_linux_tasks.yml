@@ -38,7 +38,28 @@
     - ansible_facts['os_family'] == 'Debian'
     - apt_sbsigntools is failed
 
-- name: RedHat — dnf install sbsigntools (best effort; may need CRB/EPEL)
+# RHEL: sbsigntools is often in CodeReady Builder (CRB) or EPEL — see docs/18-ansible-secureboot-ca-assessment.md
+- name: RedHat — enable CRB / powertools (best effort; helps dnf find sbsigntools)
+  ansible.builtin.shell: |
+    set +e
+    V="{{ ansible_distribution_major_version }}"
+    A="{{ ansible_architecture }}"
+    if command -v subscription-manager >/dev/null 2>&1; then
+      subscription-manager repos --enable "codeready-builder-for-rhel-${V}-${A}-rpms" 2>/dev/null
+    fi
+    if command -v dnf >/dev/null 2>&1; then
+      dnf config-manager --set-enabled crb 2>/dev/null
+      dnf config-manager --set-enabled powertools 2>/dev/null
+    fi
+  args:
+    executable: /bin/bash
+  failed_when: false
+  changed_when: false
+  when:
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'RedHat'
+
+- name: RedHat — dnf install sbsigntools (best effort; may still need EPEL on some systems)
   ansible.builtin.command:
     argv:
       - bash
