@@ -1154,14 +1154,15 @@ Start-ScheduledTask -TaskName "\\Microsoft\\Windows\\PI\\Secure-Boot-Update"`
 
   const windowsBootloader = {
     label: "Windows bootloader signing CA check",
-    description: "ตรวจไฟล์ boot manager ว่า signed ด้วย certificate chain 2011 หรือ 2023 ถ้า SignerCertificate ไม่ออก ให้ใช้ signtool fallback",
+    description: "ตรวจว่าไฟล์ boot manager มีอยู่จริงไหม และ signed ด้วย certificate chain 2011 หรือ 2023 ถ้า SignerCertificate ไม่ออก ให้ใช้ signtool fallback",
     code: `$bootFiles = @(
   "$env:SystemRoot\\Boot\\EFI\\bootmgfw.efi",
   "$env:SystemDrive\\EFI\\Microsoft\\Boot\\bootmgfw.efi"
 )
 
 $bootFiles | ForEach-Object {
-  if (Test-Path $_) {
+  $exists = Test-Path $_
+  if ($exists) {
     Write-Host "\\n===== $_ ====="
     $sig = Get-AuthenticodeSignature $_
     $cert = $sig.SignerCertificate
@@ -1169,14 +1170,15 @@ $bootFiles | ForEach-Object {
 
     [PSCustomObject]@{
       Path = $_
+      Bootloader_File_Exists = $true
       Status = $sig.Status
       Subject = $cert.Subject
       Issuer = $cert.Issuer
       NotBefore = $cert.NotBefore
       NotAfter = $cert.NotAfter
       Thumbprint = $cert.Thumbprint
-      Is2011 = $text -match "2011|Windows Production PCA"
-      Is2023 = $text -match "2023|Windows UEFI CA"
+      Bootloader_Uses_2011_CA = $text -match "2011|Windows Production PCA"
+      Bootloader_Uses_2023_CA = $text -match "2023|Windows UEFI CA"
       NeedSigntoolFallback = -not $cert
     } | Format-List
 
@@ -1184,6 +1186,11 @@ $bootFiles | ForEach-Object {
       Write-Host "SignerCertificate is empty. If signtool is installed, run:"
       Write-Host "signtool verify /pa /v \`"$_\`""
     }
+  } else {
+    [PSCustomObject]@{
+      Path = $_
+      Bootloader_File_Exists = $false
+    } | Format-List
   }
 }`
   };
@@ -1229,11 +1236,16 @@ $bootFiles | ForEach-Object {
         Thumbprint = $_.Certificate.Thumbprint
         Status = ($_.ChainElementStatus | ForEach-Object { $_.Status }) -join ","
         StatusInformation = ($_.ChainElementStatus | ForEach-Object { $_.StatusInformation.Trim() }) -join "; "
-        Is2011 = $text -match "2011|Windows Production PCA"
-        Is2023 = $text -match "2023|Windows UEFI CA"
+        Chain_Element_Uses_2011_CA = $text -match "2011|Windows Production PCA"
+        Chain_Element_Uses_2023_CA = $text -match "2023|Windows UEFI CA"
       } | Format-List
       $index += 1
     }
+  } else {
+    [PSCustomObject]@{
+      Path = $_
+      Bootloader_File_Exists = $false
+    } | Format-List
   }
 }`
   };
