@@ -1,0 +1,7 @@
+---
+# WinRM defaults for Windows group. Connection refused on :5986 usually means only HTTP :5985 is open.
+# Override if you use HTTPS listeners:
+#   ansible-playbook -e ansible_winrm_scheme=https -e ansible_port=5986
+ansible_winrm_scheme: http
+ansible_port: 5985
+ansible_winrm_server_cert_validation: ignore
