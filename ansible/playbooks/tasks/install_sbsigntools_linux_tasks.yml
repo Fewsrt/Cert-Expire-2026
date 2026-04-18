@@ -99,4 +99,4 @@
 
 - name: Report sbverify availability
   ansible.builtin.debug:
-    msg: "{{ (['sbverify: ' ~ which_sbverify.stdout] + (sbverify_version.stdout_lines | default([]))) if which_sbverify.rc == 0 else ['sbverify not installed; bootloader evidence will use strings/binary heuristics on this host.'] }}"
+    msg: "{{ (['sbverify: ' ~ which_sbverify.stdout] + (sbverify_version.stdout_lines | default([]))) if which_sbverify.rc == 0 else ['sbverify not installed; Linux assessment will mark bootloader CA as NEEDS_EVIDENCE until sbsigntools is available.'] }}"
