@@ -607,6 +607,240 @@ code {
   display: block;
 }
 
+.readiness-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 24px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.readiness-hero h2 {
+  margin: 8px 0 0;
+  font-size: clamp(26px, 3.5vw, 40px);
+  line-height: 1.1;
+}
+
+.readiness-intro {
+  margin: 12px 0 0;
+  color: var(--muted);
+  max-width: 72ch;
+  line-height: 1.45;
+}
+
+.readiness-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.readiness-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px 22px;
+}
+
+.readiness-card-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.readiness-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.readiness-card-head-right {
+  flex-shrink: 0;
+}
+
+.readiness-eyebrow {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.readiness-title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.readiness-tier-badge {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  color: var(--ink);
+}
+
+.readiness-tier-badge.tier-not-impacted {
+  border-color: #9bc4b4;
+  background: #e8f5f0;
+  color: #0d4a32;
+}
+
+.readiness-tier-badge.tier-needs-review {
+  border-color: #e0c28a;
+  background: #fff8e8;
+  color: #6a4a00;
+}
+
+.readiness-tier-badge.tier-action-required {
+  border-color: #e0a8a8;
+  background: #fdeff0;
+  color: #7a1a22;
+}
+
+.readiness-tier-badge.legacy-status-pending,
+.readiness-tier-badge.legacy-status-in-progress {
+  border-color: var(--line);
+  background: #f0f0ec;
+}
+
+.readiness-tier-badge.legacy-status-pass {
+  border-color: #9bc4b4;
+  background: #e8f5f0;
+  color: #0d4a32;
+}
+
+.readiness-tier-badge.legacy-status-fail,
+.readiness-tier-badge.legacy-status-exception {
+  border-color: #e0a8a8;
+  background: #fdeff0;
+  color: #7a1a22;
+}
+
+.readiness-summary {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.readiness-meta {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.readiness-legacy-msg {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--panel-soft);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.readiness-hosts h4 {
+  margin: 16px 0 8px;
+  font-size: 15px;
+}
+
+.readiness-host-details {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: #fafaf8;
+}
+
+.readiness-host-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+
+.readiness-host-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.readiness-host-name {
+  font-family: ui-monospace, monospace;
+  font-size: 14px;
+}
+
+.readiness-host-tier {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.readiness-host-body {
+  margin-top: 10px;
+  padding-left: 4px;
+}
+
+.readiness-host-headline {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.readiness-next-steps strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.readiness-next-steps ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.readiness-next-steps li {
+  margin-bottom: 4px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.readiness-buckets,
+.readiness-hint {
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.readiness-tech {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.readiness-tech code {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.readiness-json {
+  margin: 8px 0 0;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  overflow: auto;
+  max-height: 220px;
+}
+
 .summary-hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 220px;

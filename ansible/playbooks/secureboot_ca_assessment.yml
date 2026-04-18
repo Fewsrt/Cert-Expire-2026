@@ -92,7 +92,6 @@
               decision: PACKAGE_INSTALL_FAILED
               root_cause: "sbsigntools install or prerequisite task failed: {{ ansible_failed_result.msg | default('unknown') | string | truncate(1500) }}"
               fix: "Fix apt/yum/dnf/zypper access, repos (CRB/EPEL policy), sudo/su; then rerun. Or disable automated install: secureboot_install_sbsigntools=false in group_vars."
-              operational_interpretation: "Guest was reachable over SSH but the optional package install play did not complete; bootloader PKCS#7 was not collected in this run."
               secure_boot_enabled: ""
               db_has_2011: ""
               db_has_2023: ""
@@ -102,8 +101,6 @@
               active_bootloader_has_2011: ""
               active_bootloader_has_2023: ""
               active_bootloader_signature_method: ""
-              active_bootloader_resolve_method: ""
-              bootloader_signature_status: ""
               ca2023_alignment: PACKAGE_INSTALL_FAILED
               ca2023_summary: "Install play failed before assessment."
 
@@ -320,20 +317,6 @@
               $ca2023Summary = "Firmware variables include CA 2023 but bootloader signature classification is unclear; review authenticode chain manually."
               }
     
-              $operationalInterpretation = if (-not $secureBoot) {
-              "Secure Boot off or unknown: does not assess UEFI-enforced boot or CA migration under SB."
-              } elseif (-not $bootloaderSummary.exists) {
-              "bootmgfw.efi not resolved: cannot relate policy to an on-disk boot manager file."
-              } elseif ($decision -like "IMPACTED*" -or $decision -like "*PENDING*" -or $decision -like "*VENDOR*") {
-              "Addresses firmware db/kek vs Authenticode chain on bootmgfw; catalog-vs-embedded Authenticode caveats apply. Indicates policy/migration gap, not a guaranteed immediate boot failure—validate after updates and reboot tests."
-              } elseif ($decision -eq "BOOTLOADER_EFI_FILE_NOT_FOUND") {
-              "bootmgfw.efi was not found at expected ESP or OS fallback paths; policy vs Authenticode chain cannot be evaluated until the file exists."
-              } elseif ($decision -eq "PASS_OR_LOW_RISK") {
-              "NVRAM + bootmgfw chain snapshot consistent with low policy concern; does not model future revocation or embedded-vs-catalog nuances without manual review."
-              } else {
-              "Based on Get-SecureBootUEFI (NVRAM) and Get-AuthenticodeSignature/X509Chain on bootmgfw.efi. Interprets CA rollout impact only; does not guarantee next reboot behavior (see Authenticode catalog limitations)."
-              }
-    
               [PSCustomObject]@{
               host = $env:COMPUTERNAME
               os_family = "windows"
@@ -349,13 +332,11 @@
               active_bootloader_signature_method = "windows_authenticode"
               ca2023_alignment = $ca2023Alignment
               ca2023_summary = $ca2023Summary
-              bootloader_signature_status = [string]$bootloaderSummary.signature_status
               bootloader_chain = $bootloaderSummary.chain
               variables = $vars
               decision = $decision
               root_cause = $rootCause
               fix = $fix
-              operational_interpretation = $operationalInterpretation
               } | ConvertTo-Json -Depth 8 -Compress
           register: windows_assessment_raw
           changed_when: false
@@ -372,7 +353,6 @@
               decision: ASSESSMENT_EXCEPTION
               root_cause: "{{ ansible_failed_result.msg | default('unknown') | string | regex_replace('\r?\n', ' ') | truncate(1800) }}"
               fix: "Check WinRM, credentials, execution policy, guest health; rerun with -vvv and inspect task stderr."
-              operational_interpretation: "Guest was reachable over WinRM but the assessment shell or JSON parse failed."
               secure_boot_enabled: ""
               db_has_2011: ""
               db_has_2023: ""
@@ -383,7 +363,6 @@
               active_bootloader_has_2023: ""
               active_bootloader_signature_method: ""
               active_bootloader_source: ""
-              bootloader_signature_status: ""
               ca2023_alignment: ASSESSMENT_EXCEPTION
               ca2023_summary: WinRM assessment task failed or returned invalid JSON.
 
@@ -677,7 +656,6 @@
                     resolve_method = "fallback_esp_glob"
                   else:
                     resolve_method = "unresolved"
-                efi_files = sorted(glob.glob(esp + "/EFI/**/*.efi", recursive=True))
                 active_sig = signature(active_file)
                 variables = {name: sb_var(name) for name in ["pk", "kek", "db", "dbx"]}
                 db = variables["db"]
@@ -702,8 +680,8 @@
                   fix = "Enable UEFI Secure Boot if policy requires it, then rerun assessment."
                 elif not active_file:
                   decision = "ACTIVE_BOOTLOADER_UNRESOLVED"
-                  root_cause = "Could not resolve BootCurrent/BootOrder from efibootmgr -v to a host path under the ESP (see efibootmgr_raw in JSON); efibootmgr missing, empty, nonstandard firmware output, or no shim/grub on ESP for fallback."
-                  fix = "Install efibootmgr, verify ESP is mounted, ensure vendor shim/grub packages and EFI entries exist; inspect efibootmgr_raw in the JSON report."
+                  root_cause = "Could not resolve BootCurrent/BootOrder from efibootmgr -v to a host path under the ESP; efibootmgr missing, empty, nonstandard firmware output, or no shim/grub on ESP for fallback."
+                  fix = "Install efibootmgr, verify ESP is mounted, ensure vendor shim/grub packages and EFI entries exist; rerun with -vvv and check efibootmgr on the guest."
                 elif active_file and not os.path.exists(active_file):
                   decision = "IMPACTED"
                   root_cause = "Active EFI bootloader path does not exist on disk"
@@ -770,34 +748,7 @@
                 else:
                   ca2023_alignment = "BOOTLOADER_CHAIN_UNCLEAR"
                   ca2023_summary = "Firmware variables include CA 2023 but bootloader PKCS#7 classification is unclear; review active_bootloader_signature_text."
-      
-                def operational_interpretation_linux():
-                  """Honest scope: what this scan can/cannot say about migration impact vs next reboot."""
-                  if not secure_boot_enabled:
-                    return "Secure Boot off or unknown: does not assess UEFI-enforced boot or CA migration under SB."
-                  if not active_file:
-                    return "Cannot relate policy to an active EFI file: migration impact and boot chain are not assessed."
-                  if active_file and not os.path.exists(active_file):
-                    return "Boot entry references a missing file: likely boot break until repaired; CA labels are secondary."
-                  if active_file and not owner:
-                    return "EFI file not from an installed package: vendor-supported boot chain not established."
-                  m = active_sig.get("method", "")
-                  if m == "unreadable":
-                    return "EFI file unreadable: PKCS#7 not obtained; cannot substantiate CA alignment or infer reboot outcome."
-                  if m == "sbverify_not_installed":
-                    return "No PKCS#7 read (sbverify missing): cannot substantiate CA 2011/2023 on the running bootloader file. May still boot today; migration verdict requires sbsigntools."
-                  if m == "sbverify_failed":
-                    return "sbverify failed: incomplete PKCS#7; do not treat decision as proof of boot success or failure."
-                  if m == "sbverify" and (not active_sig["has_2011"]) and (not active_sig["has_2023"]):
-                    return "PKCS#7 present but CA markers unmatched: review raw listing; not enough to claim firmware/boot alignment."
-                  if decision.startswith("IMPACTED") or "VENDOR" in decision or "PENDING" in decision:
-                    return "Addresses Microsoft CA 2023 rollout / policy gap vs on-disk chain; not a guarantee of immediate boot failure—validate after vendor updates and reboot tests."
-                  if decision == "NEEDS_EVIDENCE":
-                    return "Evidence gap: alone cannot confirm migration impact or predict next reboot; remediate tooling/path then rerun."
-                  if decision == "PASS_OR_LOW_RISK":
-                    return "NVRAM + PKCS#7 snapshot consistent with low policy concern; does not model future revocation or hardware-specific dbx."
-                  return "Based on mokutil (firmware vars) and sbverify --list (package tool) on the resolved active EFI file owned by packages. Interprets CA rollout impact only; does not emulate firmware execution or guarantee next reboot."
-      
+    
                 print(json.dumps({
                   "host": os.uname().nodename,
                   "os_family": "linux",
@@ -809,7 +760,7 @@
                   "kek_has_2023": bool(kek["has_kek_2023"]),
                   "dbx_readable": bool(dbx["readable"]),
                   "active_bootloader_file": active_file,
-                  "active_bootloader_raw": active_raw,
+                  "active_bootloader_raw": (active_raw or "")[:2000],
                   "active_bootloader_resolve_method": resolve_method,
                   "active_bootloader_owner": owner,
                   "active_bootloader_has_2011": bool(active_sig["has_2011"]),
@@ -817,15 +768,13 @@
                   "active_bootloader_signature_method": active_sig.get("method", ""),
                   "ca2023_alignment": ca2023_alignment,
                   "ca2023_summary": ca2023_summary,
-                  "active_bootloader_signature_text": active_sig["text"],
-                  "efi_files": efi_files,
+                  "active_bootloader_signature_text": active_sig["text"][:6000],
                   "package_versions": package_versions,
-                  "efibootmgr_raw": efibootmgr[:32000],
+                  "efibootmgr_raw": efibootmgr[:2048],
                   "variables": variables,
                   "decision": decision,
                   "root_cause": root_cause,
                   "fix": fix,
-                  "operational_interpretation": operational_interpretation_linux(),
                 }, separators=(",", ":")))
                 PY
           register: linux_assessment_raw
@@ -843,7 +792,6 @@
               decision: ASSESSMENT_EXCEPTION
               root_cause: "{{ ansible_failed_result.msg | default('unknown') | string | regex_replace('\r?\n', ' ') | truncate(1800) }}"
               fix: "Check SSH, sudo/su, python3, mokutil, guest disk/ESP; rerun with -vvv."
-              operational_interpretation: "Guest was reachable over SSH but the assessment shell or JSON parse failed."
               secure_boot_enabled: ""
               db_has_2011: ""
               db_has_2023: ""
@@ -853,8 +801,6 @@
               active_bootloader_has_2011: ""
               active_bootloader_has_2023: ""
               active_bootloader_signature_method: ""
-              active_bootloader_resolve_method: ""
-              bootloader_signature_status: ""
               ca2023_alignment: ASSESSMENT_EXCEPTION
               ca2023_summary: SSH assessment task failed or returned invalid JSON.
 
@@ -880,16 +826,25 @@
         content: |
           [
           {% for host in _report_hosts %}
+          {% set _inv = {
+            'vcenter_host': hostvars[host].vcenter_host | default(''),
+            'vcenter_cluster': hostvars[host].vcenter_cluster | default(''),
+            'vcenter_vm_name': hostvars[host].vcenter_vm_name | default(''),
+            'vcenter_guest_os': hostvars[host].vcenter_guest_os | default(''),
+            'target_os_family': hostvars[host].target_os_family | default(''),
+            'vcenter_secure_boot': hostvars[host].vcenter_secure_boot | default(''),
+            'vcenter_firmware': hostvars[host].vcenter_firmware | default('')
+          } %}
           {% if hostvars[host].secureboot_assessment is defined %}
-          {{ hostvars[host].secureboot_assessment | combine({'inventory_host': host}) | to_nice_json }}
+          {{ hostvars[host].secureboot_assessment | combine({'inventory_host': host, 'inventory_context': _inv}) | to_nice_json }}
           {% else %}
           {% set row = (hostvars['localhost'].secureboot_transport | default({}))[host] | default({}) %}
           {% if host in (groups['windows'] | default([])) and not (row.winrm_ok | default(false)) %}
-          {{ {'inventory_host': host, 'os_family': 'windows', 'failure_category': 'connectivity', 'decision': 'CONNECTIVITY_FAILED', 'ca2023_alignment': 'CONNECTIVITY_FAILED', 'ca2023_summary': 'No in-guest assessment: WinRM did not succeed.', 'root_cause': 'WinRM/transport failed (unreachable, timeout, auth, listener): ' ~ (row.winrm_msg | default('no detail') | string), 'fix': 'Fix DNS/firewall/5985-5986, credential, WinRM service, TLS; confirm ansible_host and inventory.', 'operational_interpretation': 'ICMP from controller: ' ~ (row.icmp_msg | default('') | truncate(500) if not (row.icmp_ok | default(false)) else 'ok (many sites block ICMP while WinRM still works)'), 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': '', 'active_bootloader_source': '', 'bootloader_signature_status': ''} | to_nice_json }}
+          {{ {'inventory_host': host, 'inventory_context': _inv, 'os_family': 'windows', 'failure_category': 'connectivity', 'decision': 'CONNECTIVITY_FAILED', 'ca2023_alignment': 'CONNECTIVITY_FAILED', 'ca2023_summary': 'No in-guest assessment: WinRM did not succeed.', 'root_cause': 'WinRM/transport failed (unreachable, timeout, auth, listener): ' ~ (row.winrm_msg | default('no detail') | string), 'fix': 'Fix DNS/firewall/5985-5986, credential, WinRM service, TLS; confirm ansible_host and inventory.', 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': ''} | to_nice_json }}
           {% elif host in (groups['linux'] | default([])) and not (row.ssh_ok | default(false)) %}
-          {{ {'inventory_host': host, 'os_family': 'linux', 'failure_category': 'connectivity', 'decision': 'CONNECTIVITY_FAILED', 'ca2023_alignment': 'CONNECTIVITY_FAILED', 'ca2023_summary': 'No in-guest assessment: SSH did not succeed.', 'root_cause': 'SSH failed (unreachable, timeout, auth, or missing Python): ' ~ (row.ssh_msg | default('no detail') | string), 'fix': 'Fix DNS/firewall:22, ansible_user/key/password, sudo; confirm ansible_host.', 'operational_interpretation': 'ICMP from controller: ' ~ (row.icmp_msg | default('') | truncate(500) if not (row.icmp_ok | default(false)) else 'ok'), 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': '', 'active_bootloader_resolve_method': '', 'bootloader_signature_status': ''} | to_nice_json }}
+          {{ {'inventory_host': host, 'inventory_context': _inv, 'os_family': 'linux', 'failure_category': 'connectivity', 'decision': 'CONNECTIVITY_FAILED', 'ca2023_alignment': 'CONNECTIVITY_FAILED', 'ca2023_summary': 'No in-guest assessment: SSH did not succeed.', 'root_cause': 'SSH failed (unreachable, timeout, auth, or missing Python): ' ~ (row.ssh_msg | default('no detail') | string), 'fix': 'Fix DNS/firewall:22, ansible_user/key/password, sudo; confirm ansible_host.', 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': ''} | to_nice_json }}
           {% else %}
-          {{ {'inventory_host': host, 'os_family': ('windows' if host in (groups['windows'] | default([])) else 'linux'), 'failure_category': 'report_gap', 'decision': 'REPORT_GAP', 'ca2023_alignment': 'REPORT_GAP', 'ca2023_summary': 'No assessment fact and transport checks did not explain the gap.', 'root_cause': 'Playbook did not record secureboot_assessment and transport appeared OK — check earlier task stderr with -vvv.', 'fix': 'Re-run this play; if it persists, file a bug with ansible log.', 'operational_interpretation': 'Unexpected gap; not a policy classification.', 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': ''} | to_nice_json }}
+          {{ {'inventory_host': host, 'inventory_context': _inv, 'os_family': ('windows' if host in (groups['windows'] | default([])) else 'linux'), 'failure_category': 'report_gap', 'decision': 'REPORT_GAP', 'ca2023_alignment': 'REPORT_GAP', 'ca2023_summary': 'No assessment fact and transport checks did not explain the gap.', 'root_cause': 'Playbook did not record secureboot_assessment and transport appeared OK — check earlier task stderr with -vvv.', 'fix': 'Re-run this play; if it persists, file a bug with ansible log.', 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': ''} | to_nice_json }}
           {% endif %}
           {% endif %}
           {% if not loop.last %},{% endif %}
@@ -901,23 +856,20 @@
         dest: "{{ report_csv }}"
         mode: "0644"
         content: |
-          inventory_host,os_family,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,active_bootloader_signature_method,active_bootloader_path_resolution,code_signature_status,failure_category,ca2023_alignment,ca2023_summary,decision,root_cause,fix,operational_interpretation
+          inventory_host,os_family,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,active_bootloader_signature_method
           {% for host in _report_hosts %}
           {% set a = hostvars[host].secureboot_assessment | default({}) %}
           {% if a %}
-          {% set path_res = a.active_bootloader_resolve_method | default(a.active_bootloader_source | default('')) %}
-          {{ host }},{{ a.os_family | default('') }},{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},"{{ (a.active_bootloader_signature_method | default('')) | replace('"', '""') }}","{{ path_res | replace('"', '""') }}","{{ (a.bootloader_signature_status | default('')) | replace('"', '""') }}","{{ (a.failure_category | default('')) | replace('"', '""') }}","{{ (a.ca2023_alignment | default('')) | replace('"', '""') }}","{{ (a.ca2023_summary | default('')) | replace('"', '""') }}",{{ a.decision | default('') }},"{{ (a.root_cause | default('')) | replace('"', '""') }}","{{ (a.fix | default('')) | replace('"', '""') }}","{{ (a.operational_interpretation | default('')) | replace('"', '""') }}"
+          {{ host }},{{ a.os_family | default('') }},{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},"{{ (a.active_bootloader_signature_method | default('')) | replace('"', '""') }}"
           {% else %}
           {% set row = (hostvars['localhost'].secureboot_transport | default({}))[host] | default({}) %}
           {% if host in (groups['windows'] | default([])) and not (row.winrm_ok | default(false)) %}
-          {% set icmp_txt = (row.icmp_msg | default('') | truncate(400)) if not (row.icmp_ok | default(false)) else 'ok (ICMP may be blocked while WinRM works)' %}
-          {{ host }},windows,,,,,,"",,,,"","","connectivity","CONNECTIVITY_FAILED","No in-guest assessment: WinRM did not succeed.",CONNECTIVITY_FAILED,"{{ ('WinRM/transport failed: ' ~ (row.winrm_msg | default(''))) | replace('"', '""') }}","Fix DNS/firewall/WinRM listener and credentials; confirm ansible_host.","{{ ('ICMP from controller: ' ~ icmp_txt) | replace('"', '""') }}"
+          {{ host }},windows,,,,,,"",,,""
           {% elif host in (groups['linux'] | default([])) and not (row.ssh_ok | default(false)) %}
-          {% set icmp_txt = (row.icmp_msg | default('') | truncate(400)) if not (row.icmp_ok | default(false)) else 'ok' %}
-          {{ host }},linux,,,,,,"",,,,"","","connectivity","CONNECTIVITY_FAILED","No in-guest assessment: SSH did not succeed.",CONNECTIVITY_FAILED,"{{ ('SSH failed: ' ~ (row.ssh_msg | default(''))) | replace('"', '""') }}","Fix SSH port, keys, sudo, ansible_user.","{{ ('ICMP from controller: ' ~ icmp_txt) | replace('"', '""') }}"
+          {{ host }},linux,,,,,,"",,,""
           {% else %}
           {% set gap_family = 'windows' if host in (groups['windows'] | default([])) else 'linux' %}
-          {{ host }},{{ gap_family }},,,,,,"",,,,"","","report_gap","REPORT_GAP","Unexpected reporting gap.",REPORT_GAP,"No secureboot_assessment and transport looked OK — see -vvv log.","",""
+          {{ host }},{{ gap_family }},,,,,,"",,,""
           {% endif %}
           {% endif %}
           {% endfor %}

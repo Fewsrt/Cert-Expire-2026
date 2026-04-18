@@ -127,21 +127,23 @@ The playbook still records `active_bootloader_signature_method = windows_authent
 
 ## Output Columns
 
-The CSV report includes:
+The **CSV** report is a short technical snapshot per host (firmware flags + active bootloader path/method only). It does **not** include classification or narrative fields such as `failure_category`, `ca2023_alignment`, `ca2023_summary`, `decision`, `root_cause`, `fix`, `active_bootloader_path_resolution`, or `code_signature_status` — those remain in **`secureboot_ca_assessment.json`** for automation and sync. (The playbook no longer emits a separate `operational_interpretation` field in JSON.)
+
+CSV columns:
 
 | Column | Meaning |
 |---|---|
+| `inventory_host` | Ansible inventory name |
+| `os_family` | `windows` or `linux` |
+| `secure_boot_enabled` | Guest-reported Secure Boot state |
 | `db_has_2011` | Firmware `db` contains 2011 CA text |
 | `db_has_2023` | Firmware `db` contains Windows/Microsoft UEFI CA 2023 |
 | `kek_has_2023` | Firmware `KEK` contains Microsoft Corporation KEK 2K CA 2023 |
+| `dbx_readable` | Whether `dbx` could be read |
 | `active_bootloader_file` | The EFI file considered active |
 | `active_bootloader_has_2011` | Active bootloader certificate chain contains 2011 CA text |
 | `active_bootloader_has_2023` | Active bootloader certificate chain contains 2023 CA text |
 | `active_bootloader_signature_method` | Linux: `sbverify`, `sbverify_failed`, `pesign`, `pesign_failed`, `sbverify_not_installed` (neither tool on PATH), `unreadable`, `none`. Windows: `windows_authenticode` |
-| `decision` | `PASS_OR_LOW_RISK`, `IMPACTED`, `NEEDS_EVIDENCE`, `NEEDS_MANUAL_REVIEW`, or related final state |
-| `root_cause` | Why the host is not pass/low-risk |
-| `fix` | The remediation workflow for that host |
-| `operational_interpretation` | What this snapshot can and cannot claim about **migration/policy impact** vs **whether the system will boot on the next reboot** (static inspection only; not a firmware emulator) |
 
 ## Active Bootloader Logic
 
@@ -178,7 +180,7 @@ Active file:
 /boot/efi/EFI/redhat/shimx64.efi
 ```
 
-`active_bootloader_has_2011` / `active_bootloader_has_2023` come from **`sbverify --list`** when it succeeds; if `sbverify` is absent or non-zero, the playbook uses **`pesign -i … -S`** (same CA regex on tool output). Both are **distro packages** — no raw-binary heuristic. If both are missing or fail, the row is typically `NEEDS_EVIDENCE`. **`operational_interpretation`** limits claims about **next-reboot boot success**.
+`active_bootloader_has_2011` / `active_bootloader_has_2023` come from **`sbverify --list`** when it succeeds; if `sbverify` is absent or non-zero, the playbook uses **`pesign -i … -S`** (same CA regex on tool output). Both are **distro packages** — no raw-binary heuristic. If both are missing or fail, the JSON row is typically `NEEDS_EVIDENCE`. Use **`ca2023_summary`**, **`root_cause`**, and **`fix`** for scope and remediation; results are static inspection only (not a firmware emulator).
 
 ## Remediation
 

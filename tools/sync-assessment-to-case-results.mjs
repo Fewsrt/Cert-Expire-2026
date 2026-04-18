@@ -20,17 +20,28 @@ import {
   perHostBeforeLine,
   impactSelectValue,
   perHostImpactLine,
+  trackerStatusFromRow,
 } from "./assessment-select-values.mjs";
+import { buildCaseReadinessV1 } from "./readiness-from-assessment.mjs";
 import { getFirebaseCliOAuthCredentials } from "./load-firebase-cli-oauth.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "cert-expire-2026-ca";
 const COLLECTION = "vmCa2023Results";
 
-function mapStatus(decision) {
-  const d = String(decision || "");
-  if (d === "PASS_OR_LOW_RISK") return "pass";
-  if (d.startsWith("IMPACTED") || d === "NON_COMPLIANT_OR_OUT_OF_SCOPE") return "fail";
+const DROPPED_ANSIBLE_KEYS = new Set([
+  "decision",
+  "ca2023_alignment",
+  "ca2023_summary",
+  "root_cause",
+  "fix",
+  "failure_category",
+  "operational_interpretation",
+]);
+
+function uiStatusFromCompliance(c) {
+  if (c === "pass") return "pass";
+  if (c === "fail") return "fail";
   return "exception";
 }
 
@@ -56,8 +67,9 @@ function ansibleVmDetailFromRow(r) {
     active_bootloader_file: r.active_bootloader_file || "",
     active_bootloader_has_2011: !!r.active_bootloader_has_2011,
     active_bootloader_has_2023: !!r.active_bootloader_has_2023,
-    ca2023_alignment: r.ca2023_alignment || "",
-    ca2023_summary: r.ca2023_summary || "",
+    secure_boot_enabled: r.secure_boot_enabled,
+    db_has_2023: r.db_has_2023,
+    kek_has_2023: r.kek_has_2023,
   };
 }
 
@@ -72,6 +84,14 @@ function fullAssessmentRecord(a) {
   } catch {
     return { ...a };
   }
+}
+
+function assessmentForStorage(a) {
+  const o = fullAssessmentRecord(a);
+  for (const k of DROPPED_ANSIBLE_KEYS) {
+    delete o[k];
+  }
+  return o;
 }
 
 function encodeValue(v) {
@@ -182,20 +202,21 @@ async function restPatchDocument(accessToken, docId, payload) {
 
 function buildMergedPayload(caseId, caseMeta, rows) {
   const iso = new Date().toISOString();
-  const statuses = rows.map((r) => mapStatus(r.decision));
+  const statuses = rows.map((r) => uiStatusFromCompliance(trackerStatusFromRow(r)));
   const hosts = rows.map((r) => r.inventory_host || r.host).filter(Boolean);
-  const slims = rows.map((r) => fullAssessmentRecord(r));
+  const slims = rows.map((r) => assessmentForStorage(r));
 
   const notesBlocks = rows.map((r) => {
     const h = r.inventory_host || r.host;
-    return `[${h}] ${r.ca2023_alignment || ""}\n${r.ca2023_summary || ""}\nDecision: ${r.decision || ""}`;
+    return `[${h}] ansible technical: sb=${r.secure_boot_enabled} db2023=${r.db_has_2023} kek2023=${r.kek_has_2023} bl2023=${r.active_bootloader_has_2023} method=${r.active_bootloader_signature_method || ""}`;
   });
 
   const eventsLines = rows.map(
-    (r) => `${r.inventory_host || r.host}: ${r.decision} (${r.os_family}) ansible ${iso}`
+    (r) => `${r.inventory_host || r.host}: ${trackerStatusFromRow(r)} (${r.os_family}) ansible ${iso}`
   );
   const beforeDetail = rows.map(perHostBeforeLine).join(" | ");
   const impactDetail = rows.map(perHostImpactLine).join(" | ");
+  const readinessV1 = buildCaseReadinessV1(rows, caseId, iso);
 
   return {
     caseId,
@@ -215,8 +236,8 @@ function buildMergedPayload(caseId, caseMeta, rows) {
       `Impact (ansible): ${impactDetail}`,
     ].join("\n"),
     impact: mergeImpactSelect(rows.map(impactSelectValue)),
-    rootCause: rows.map((r) => `${r.inventory_host}: ${r.root_cause || ""}`).join("\n"),
-    actualRemediation: rows.map((r) => `${r.inventory_host}: ${r.fix || ""}`).join("\n"),
+    rootCause: "",
+    actualRemediation: "",
     notes: [caseMeta?.purpose && `Purpose: ${caseMeta.purpose}`, ...notesBlocks].filter(Boolean).join("\n\n"),
     evidenceImages: [],
     updatedAt: iso,
@@ -224,6 +245,7 @@ function buildMergedPayload(caseId, caseMeta, rows) {
     ansibleVmDetails: rows.map(ansibleVmDetailFromRow),
     ansibleAssessment: slims[0],
     ansibleAssessments: slims,
+    readinessV1,
   };
 }
 

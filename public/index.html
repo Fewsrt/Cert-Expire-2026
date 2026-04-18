@@ -12,6 +12,7 @@
       <nav class="app-nav" aria-label="main views">
         <button class="nav-tab active" data-view="tests" type="button">Test Cases</button>
         <button class="nav-tab" data-view="summary" type="button">Summary</button>
+        <button class="nav-tab" data-view="readiness" type="button">ความพร้อม</button>
       </nav>
 
       <section class="status-strip" aria-label="summary">
@@ -216,6 +217,19 @@
           <h3>Result Cards</h3>
           <div id="summary-case-cards" class="summary-case-cards"></div>
         </section>
+      </section>
+
+      <section id="readiness-view" class="view" aria-live="polite">
+        <section class="readiness-hero">
+          <div>
+            <p class="eyebrow">ลูกค้า / Executive</p>
+            <h2>ความพร้อมต่อ CA 2023 / Cert-Expire</h2>
+            <p class="readiness-intro">
+              สรุปจากฟิลด์ <code>readinessV1</code> (sync จาก Ansible) หากเอกสารเก่ายังไม่มีฟิลด์นี้ ระบบจะแสดงสถานะและบันทึกจาก Tracker เดิม
+            </p>
+          </div>
+        </section>
+        <div id="readiness-panel" class="readiness-panel"></div>
       </section>
     </main>
 

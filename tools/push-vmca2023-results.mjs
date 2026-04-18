@@ -18,6 +18,7 @@ import {
   beforeCaSelectValue,
   beforeKekSelectValue,
   impactSelectValue,
+  trackerStatusFromRow,
 } from "./assessment-select-values.mjs";
 import { getFirebaseCliOAuthCredentials } from "./load-firebase-cli-oauth.mjs";
 

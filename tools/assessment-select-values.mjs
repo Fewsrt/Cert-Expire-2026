@@ -44,14 +44,48 @@ export function perHostBeforeLine(row) {
   return `${h}: CA2023=${beforeCaSelectValue(row)} KEK2023=${beforeKekSelectValue(row)}`;
 }
 
-/** Operational/compliance impact from assessment decision → UI Impact field. */
+/**
+ * pass | fail | exception — derived only from measurable Ansible fields (no decision/ca2023_* in JSON).
+ */
+export function trackerStatusFromRow(row) {
+  const t = row.assessment_transport;
+  if (t === "winrm_failed" || t === "ssh_failed") return "exception";
+  const ph = row.assessment_phase;
+  if (ph === "package_install" || ph === "script_error" || ph === "report_gap") return "exception";
+
+  if (row.secure_boot_enabled === false) return "fail";
+  if (row.db_has_2023 === false || row.kek_has_2023 === false) return "fail";
+
+  const method = String(row.active_bootloader_signature_method || "");
+  if (method === "sbverify_not_installed" || method === "sbverify_failed" || method === "unreadable") {
+    return "exception";
+  }
+
+  const os = String(row.os_family || "").toLowerCase();
+  if (!row.active_bootloader_file && os === "linux") return "fail";
+
+  if (row.active_bootloader_has_2011 === true && row.active_bootloader_has_2023 === false) {
+    return "fail";
+  }
+
+  if (row.active_bootloader_has_2023 === true) return "pass";
+
+  if (method === "sbverify" || method === "windows_authenticode") return "exception";
+
+  return "exception";
+}
+
+/** Operational impact for UI — from technical fields only. */
 export function impactSelectValue(row) {
-  const d = String(row.decision || "").trim();
-  if (!d) return "";
-  if (d === "PASS_OR_LOW_RISK") return "no";
-  if (d.startsWith("IMPACTED")) return "yes";
-  if (d === "NON_COMPLIANT_OR_OUT_OF_SCOPE") return "yes";
-  return "";
+  const t = row.assessment_transport;
+  if (t === "winrm_failed" || t === "ssh_failed") return "yes";
+  const ph = row.assessment_phase;
+  if (ph === "package_install" || ph === "script_error" || ph === "report_gap") return "yes";
+  if (row.secure_boot_enabled === false) return "yes";
+  if (row.db_has_2023 === false || row.kek_has_2023 === false) return "yes";
+  if (row.active_bootloader_has_2011 === true && row.active_bootloader_has_2023 === false) return "yes";
+  if (!row.active_bootloader_file && String(row.os_family || "").toLowerCase() === "linux") return "yes";
+  return "no";
 }
 
 /** Multiple VMs: any yes → yes; else all no → no; otherwise unset (pending / mixed review). */
@@ -64,6 +98,6 @@ export function mergeImpactSelect(vals) {
 
 export function perHostImpactLine(row) {
   const h = row.inventory_host || row.host || "?";
-  const raw = String(row.decision || "").trim() || "(none)";
-  return `${h}: impact=${impactSelectValue(row) || "pending"} decision=${raw}`;
+  const st = trackerStatusFromRow(row);
+  return `${h}: impact=${impactSelectValue(row) || "pending"} compliance=${st}`;
 }

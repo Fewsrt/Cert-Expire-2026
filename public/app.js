@@ -1,3 +1,5 @@
+import { renderCustomerReadinessView } from "./customer-readiness.js";
+
 const STORAGE_KEY = "vm-ca2023-results";
 const CONFIG_KEY = "vm-ca2023-firebase-config";
 const COLLECTION_NAME = "vmCa2023Results";
@@ -31,6 +33,8 @@ let imageZoom = 1;
 const elements = {
   testsView: document.querySelector("#tests-view"),
   summaryView: document.querySelector("#summary-view"),
+  readinessView: document.querySelector("#readiness-view"),
+  readinessPanel: document.querySelector("#readiness-panel"),
   list: document.querySelector("#case-list"),
   template: document.querySelector("#case-template"),
   total: document.querySelector("#metric-total"),
@@ -178,6 +182,9 @@ function pickPreservedAnsibleFields(previous) {
   if (Array.isArray(previous.ansibleVmDetails) && previous.ansibleVmDetails.length) {
     out.ansibleVmDetails = previous.ansibleVmDetails;
   }
+  if (previous.readinessV1 && typeof previous.readinessV1 === "object") {
+    out.readinessV1 = previous.readinessV1;
+  }
   return out;
 }
 
@@ -199,6 +206,7 @@ function render() {
   }
   renderMetrics();
   renderSummary();
+  renderReadinessView();
   switchView();
 }
 
@@ -994,9 +1002,17 @@ function getAllResults() {
   return cases.map((testCase) => results[testCase.id] || defaultResult());
 }
 
+function renderReadinessView() {
+  if (!elements.readinessPanel) return;
+  renderCustomerReadinessView(elements.readinessPanel, cases, results);
+}
+
 function switchView() {
   elements.testsView.classList.toggle("active-view", activeView === "tests");
   elements.summaryView.classList.toggle("active-view", activeView === "summary");
+  if (elements.readinessView) {
+    elements.readinessView.classList.toggle("active-view", activeView === "readiness");
+  }
 }
 
 async function connectFirebase() {

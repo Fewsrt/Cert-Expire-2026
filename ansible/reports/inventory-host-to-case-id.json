@@ -1,0 +1,20 @@
+{
+  "win2019esx7secure": "1.1",
+  "win2019esx8secure": "2.1",
+  "win2022esx7secure": "3.1",
+  "win2022esx8secure": "4.1",
+  "win2025esx8secure": "5.1",
+  "win2025esx7secureclone": "3.1",
+  "ubun24esx8secure": "6.1",
+  "ubun24esx7secureclone": "6.1",
+  "ubun20esx7secure": "6.2",
+  "ubun20esx8secureclone": "6.2",
+  "rhel101esx8secure": "7.1",
+  "rhel101esx7secureclone": "7.1",
+  "rhel810esx7secure": "7.2",
+  "rhel810esx8secureclone": "7.2",
+  "sle15sp5esx8secureclone": "8.1",
+  "sle16esx8secure": "8.1",
+  "sle15sp5esx7secure": "8.2",
+  "sle16esx7secureclone": "8.2"
+}
