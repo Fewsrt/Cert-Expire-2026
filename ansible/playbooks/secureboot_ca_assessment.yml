@@ -8,13 +8,16 @@
 # RHEL — use EPEL for sbsigntools when org allows (otherwise CRB + vendor repos only):
 #   -e secureboot_install_epel_for_sbsigntools=true
 
-- name: Preflight — ICMP from controller to each ansible_host (layer 3)
+# Per-host connectivity map on localhost: used when a guest never gets secureboot_assessment (unreachable, auth, etc.).
+- name: Preflight — ICMP, WinRM, SSH (records reason per host; does not stop the run)
   hosts: localhost
   gather_facts: false
   vars:
     _targets: "{{ (groups['windows'] | default([])) + (groups['linux'] | default([])) }}"
+    _win_hosts: "{{ groups['windows'] | default([]) }}"
+    _lin_hosts: "{{ groups['linux'] | default([]) }}"
   tasks:
-    - name: Ping ansible_host for each VM (fails fast if network/DNS down; ICMP may be blocked on some Windows firewalls)
+    - name: Layer 3 ICMP to ansible_host (informational; many sites block ICMP while WinRM/SSH still works)
       ansible.builtin.command:
         argv:
           - ping
@@ -24,723 +27,837 @@
           - "2"
           - "{{ hostvars[item].ansible_host | default(item) }}"
       loop: "{{ _targets }}"
+      register: secureboot_icmp_reg
+      ignore_errors: true
       changed_when: false
 
-- name: Preflight — WinRM to Windows guests (requires pywinrm on controller)
-  hosts: windows
-  gather_facts: false
-  tasks:
-    - name: WinRM check (win_ping)
-      ansible.windows.win_ping:
+    - name: Build connectivity map — ICMP
+      ansible.builtin.set_fact:
+        secureboot_connectivity_map: "{{ secureboot_connectivity_map | default({}) | combine({ item.item: { 'icmp_ok': (item.rc | default(1)) == 0, 'icmp_msg': ((item.stderr | default('')) + (item.stdout | default(''))) | truncate(1500) } }) }}"
+      loop: "{{ secureboot_icmp_reg.results | default([]) }}"
 
-- name: Preflight — SSH to Linux guests
-  hosts: linux
-  gather_facts: false
-  tasks:
-    - name: SSH check (ping)
+    - name: WinRM probe each Windows guest (requires pywinrm on controller)
+      ansible.windows.win_ping:
+      loop: "{{ _win_hosts }}"
+      loop_control:
+        label: "{{ item }}"
+      delegate_to: "{{ item }}"
+      register: secureboot_winrm_reg
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: Merge WinRM results into connectivity map
+      ansible.builtin.set_fact:
+        secureboot_connectivity_map: "{{ secureboot_connectivity_map | combine({ item.item: secureboot_connectivity_map[item.item] | default({}) | combine({ 'winrm_ok': (not (item.unreachable | default(false)) and not (item.failed | default(false))), 'winrm_msg': (item.msg | default('') | string) | truncate(2000) }) }) }}"
+      loop: "{{ secureboot_winrm_reg.results | default([]) }}"
+
+    - name: SSH probe each Linux guest
       ansible.builtin.ping:
+      loop: "{{ _lin_hosts }}"
+      loop_control:
+        label: "{{ item }}"
+      delegate_to: "{{ item }}"
+      register: secureboot_ssh_reg
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: Merge SSH results into connectivity map
+      ansible.builtin.set_fact:
+        secureboot_connectivity_map: "{{ secureboot_connectivity_map | combine({ item.item: secureboot_connectivity_map[item.item] | default({}) | combine({ 'ssh_ok': (not (item.unreachable | default(false)) and not (item.failed | default(false))), 'ssh_msg': (item.msg | default('') | string) | truncate(2000) }) }) }}"
+      loop: "{{ secureboot_ssh_reg.results | default([]) }}"
 
 - name: Install sbsigntools (sbverify) on Linux when enabled (default on)
   hosts: linux
   gather_facts: true
   become: true
+  ignore_unreachable: true
   become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
+  vars:
+    _cm: "{{ hostvars['localhost'].secureboot_connectivity_map | default({}) }}"
   tasks:
     - name: Install sbsigntools when secureboot_install_sbsigntools is true
-      ansible.builtin.include_tasks: tasks/install_sbsigntools_linux_tasks.yml
-      when: secureboot_install_sbsigntools | default(true) | bool
+      when:
+        - secureboot_install_sbsigntools | default(true) | bool
+        - (_cm[inventory_hostname] | default({})).ssh_ok | default(false)
+      block:
+        - ansible.builtin.include_tasks: tasks/install_sbsigntools_linux_tasks.yml
+      rescue:
+        - name: Record sbsigntools install failure
+          ansible.builtin.set_fact:
+            secureboot_pkg_failed: true
+            secureboot_pkg_msg: "{{ ansible_failed_result.msg | default('include_tasks failed') | string | truncate(2000) }}"
+            secureboot_assessment:
+              os_family: linux
+              failure_category: package_install
+              decision: PACKAGE_INSTALL_FAILED
+              root_cause: "sbsigntools install or prerequisite task failed: {{ ansible_failed_result.msg | default('unknown') | string | truncate(1500) }}"
+              fix: "Fix apt/yum/dnf/zypper access, repos (CRB/EPEL policy), sudo/su; then rerun. Or run with -e secureboot_install_sbsigntools=false if policy forbids install."
+              operational_interpretation: "Guest was reachable over SSH but the optional package install play did not complete; bootloader PKCS#7 was not collected in this run."
+              secure_boot_enabled: ""
+              db_has_2011: ""
+              db_has_2023: ""
+              kek_has_2023: ""
+              dbx_readable: ""
+              active_bootloader_file: ""
+              active_bootloader_has_2011: ""
+              active_bootloader_has_2023: ""
+              active_bootloader_signature_method: ""
+              active_bootloader_resolve_method: ""
+              bootloader_signature_status: ""
+              ca2023_alignment: PACKAGE_INSTALL_FAILED
+              ca2023_summary: "Install play failed before assessment."
 
 # Windows: Get-SecureBootUEFI for NVRAM vars; bootmgfw chain via Get-AuthenticodeSignature + X509Chain.
 # See docs/18-ansible-secureboot-ca-assessment.md — Get-AuthenticodeSignature may prefer catalog over embedded sigs.
 - name: Assess Windows Secure Boot CA state
   hosts: windows
   gather_facts: false
+  ignore_unreachable: true
+  vars:
+    _cm: "{{ hostvars['localhost'].secureboot_connectivity_map | default({}) }}"
   tasks:
-    - name: Collect Windows Secure Boot DB and bootloader CA evidence
-      ansible.windows.win_shell:
-        cmd: |
-          $ErrorActionPreference = "Continue"
-
-          function Get-FlagText {
-            param([string]$Text)
-            [PSCustomObject]@{
-              has_2011 = [bool]($Text -match "2011|Windows Production PCA|Microsoft Corporation UEFI CA 2011|Microsoft Corporation KEK CA 2011")
-              has_2023 = [bool]($Text -match "2023|Windows UEFI CA 2023|Microsoft UEFI CA 2023|Microsoft Corporation KEK 2K CA 2023")
-              has_kek_2023 = [bool]($Text -match "Microsoft Corporation KEK 2K CA 2023")
-              has_windows_uefi_ca_2023 = [bool]($Text -match "Windows UEFI CA 2023")
-              has_ms_uefi_ca_2023 = [bool]($Text -match "Microsoft UEFI CA 2023")
-              has_option_rom_2023 = [bool]($Text -match "Microsoft Option ROM UEFI CA 2023")
-            }
-          }
-
-          function Get-SbVarSummary {
-            param([string]$Name)
-            $var = Get-SecureBootUEFI -Name $Name -ErrorAction SilentlyContinue
-            if (-not $var) {
+    - name: Guest Secure Boot assessment via WinRM
+      when: (_cm[inventory_hostname] | default({})).winrm_ok | default(false)
+      block:
+        - name: Collect Windows Secure Boot DB and bootloader CA evidence
+          ansible.windows.win_shell:
+            cmd: |
+              $ErrorActionPreference = "Continue"
+    
+              function Get-FlagText {
+                param([string]$Text)
+                [PSCustomObject]@{
+                  has_2011 = [bool]($Text -match "2011|Windows Production PCA|Microsoft Corporation UEFI CA 2011|Microsoft Corporation KEK CA 2011")
+                  has_2023 = [bool]($Text -match "2023|Windows UEFI CA 2023|Microsoft UEFI CA 2023|Microsoft Corporation KEK 2K CA 2023")
+                  has_kek_2023 = [bool]($Text -match "Microsoft Corporation KEK 2K CA 2023")
+                  has_windows_uefi_ca_2023 = [bool]($Text -match "Windows UEFI CA 2023")
+                  has_ms_uefi_ca_2023 = [bool]($Text -match "Microsoft UEFI CA 2023")
+                  has_option_rom_2023 = [bool]($Text -match "Microsoft Option ROM UEFI CA 2023")
+                }
+              }
+    
+              function Get-SbVarSummary {
+                param([string]$Name)
+                $var = Get-SecureBootUEFI -Name $Name -ErrorAction SilentlyContinue
+                if (-not $var) {
+                  return [PSCustomObject]@{
+                    name = $Name
+                    readable = $false
+                    bytes = 0
+                    has_2011 = $false
+                    has_2023 = $false
+                    has_kek_2023 = $false
+                    has_windows_uefi_ca_2023 = $false
+                    has_ms_uefi_ca_2023 = $false
+                    has_option_rom_2023 = $false
+                  }
+                }
+    
+                $text = [System.Text.Encoding]::ASCII.GetString($var.Bytes)
+                $flags = Get-FlagText -Text $text
+                return [PSCustomObject]@{
+                  name = $Name
+                  readable = $true
+                  bytes = $var.Bytes.Length
+                  has_2011 = $flags.has_2011
+                  has_2023 = $flags.has_2023
+                  has_kek_2023 = $flags.has_kek_2023
+                  has_windows_uefi_ca_2023 = $flags.has_windows_uefi_ca_2023
+                  has_ms_uefi_ca_2023 = $flags.has_ms_uefi_ca_2023
+                  has_option_rom_2023 = $flags.has_option_rom_2023
+                }
+              }
+    
+              function Get-CertChainSummary {
+              param([string]$Path)
+              if (-not (Test-Path $Path)) {
+                return [PSCustomObject]@{
+                  path = $Path
+                  exists = $false
+                  signature_status = ""
+                  has_2011 = $false
+                  has_2023 = $false
+                  chain = @()
+                }
+              }
+    
+              $sig = Get-AuthenticodeSignature $Path
+              $cert = $sig.SignerCertificate
+              $chainItems = @()
+              $has2011 = $false
+              $has2023 = $false
+    
+              if ($cert) {
+                $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+                $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+                $chain.Build($cert) | Out-Null
+                $index = 0
+                foreach ($element in $chain.ChainElements) {
+                  $text = $element.Certificate.Subject + " " + $element.Certificate.Issuer
+                  $uses2011 = [bool]($text -match "2011|Windows Production PCA")
+                  $uses2023 = [bool]($text -match "2023|Windows UEFI CA")
+                  $has2011 = $has2011 -or $uses2011
+                  $has2023 = $has2023 -or $uses2023
+                  $chainItems += [PSCustomObject]@{
+                    index = $index
+                    subject = $element.Certificate.Subject
+                    issuer = $element.Certificate.Issuer
+                    not_after = $element.Certificate.NotAfter.ToString("o")
+                    uses_2011 = $uses2011
+                    uses_2023 = $uses2023
+                  }
+                  $index += 1
+                }
+              }
+    
               return [PSCustomObject]@{
-                name = $Name
-                readable = $false
-                bytes = 0
+                path = $Path
+                exists = $true
+                signature_status = [string]$sig.Status
+                has_2011 = $has2011
+                has_2023 = $has2023
+                chain = $chainItems
+              }
+              }
+    
+              $secureBoot = $null
+              try { $secureBoot = [bool](Confirm-SecureBootUEFI) } catch { $secureBoot = $false }
+    
+              $vars = @{}
+              foreach ($name in "PK","KEK","db","dbx") {
+              $vars[$name] = Get-SbVarSummary -Name $name
+              }
+    
+              $espDrive = $null
+              foreach ($letter in "Z","Y","X","W","V") {
+              if (-not (Test-Path "$letter`:\")) {
+                $espDrive = "$letter`:"
+                break
+              }
+              }
+    
+              $espMounted = $false
+              $activeBootloader = $null
+              if ($espDrive) {
+              mountvol $espDrive /S | Out-Null
+              if (Test-Path "$espDrive\EFI\Microsoft\Boot\bootmgfw.efi") {
+                $activeBootloader = "$espDrive\EFI\Microsoft\Boot\bootmgfw.efi"
+                $espMounted = $true
+              }
+              }
+    
+              $fallbackBootloader = "$env:SystemRoot\Boot\EFI\bootmgfw.efi"
+              if (-not $activeBootloader -and (Test-Path $fallbackBootloader)) {
+              $activeBootloader = $fallbackBootloader
+              }
+    
+              $bootloaderSummary = if ($activeBootloader) {
+              Get-CertChainSummary -Path $activeBootloader
+              } else {
+              [PSCustomObject]@{
+                path = ""
+                exists = $false
+                signature_status = ""
                 has_2011 = $false
                 has_2023 = $false
-                has_kek_2023 = $false
-                has_windows_uefi_ca_2023 = $false
-                has_ms_uefi_ca_2023 = $false
-                has_option_rom_2023 = $false
+                chain = @()
               }
-            }
-
-            $text = [System.Text.Encoding]::ASCII.GetString($var.Bytes)
-            $flags = Get-FlagText -Text $text
-            return [PSCustomObject]@{
-              name = $Name
-              readable = $true
-              bytes = $var.Bytes.Length
-              has_2011 = $flags.has_2011
-              has_2023 = $flags.has_2023
-              has_kek_2023 = $flags.has_kek_2023
-              has_windows_uefi_ca_2023 = $flags.has_windows_uefi_ca_2023
-              has_ms_uefi_ca_2023 = $flags.has_ms_uefi_ca_2023
-              has_option_rom_2023 = $flags.has_option_rom_2023
-            }
-          }
-
-          function Get-CertChainSummary {
-          param([string]$Path)
-          if (-not (Test-Path $Path)) {
-            return [PSCustomObject]@{
-              path = $Path
-              exists = $false
-              signature_status = ""
-              has_2011 = $false
-              has_2023 = $false
-              chain = @()
-            }
-          }
-
-          $sig = Get-AuthenticodeSignature $Path
-          $cert = $sig.SignerCertificate
-          $chainItems = @()
-          $has2011 = $false
-          $has2023 = $false
-
-          if ($cert) {
-            $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
-            $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
-            $chain.Build($cert) | Out-Null
-            $index = 0
-            foreach ($element in $chain.ChainElements) {
-              $text = $element.Certificate.Subject + " " + $element.Certificate.Issuer
-              $uses2011 = [bool]($text -match "2011|Windows Production PCA")
-              $uses2023 = [bool]($text -match "2023|Windows UEFI CA")
-              $has2011 = $has2011 -or $uses2011
-              $has2023 = $has2023 -or $uses2023
-              $chainItems += [PSCustomObject]@{
-                index = $index
-                subject = $element.Certificate.Subject
-                issuer = $element.Certificate.Issuer
-                not_after = $element.Certificate.NotAfter.ToString("o")
-                uses_2011 = $uses2011
-                uses_2023 = $uses2023
               }
-              $index += 1
-            }
-          }
-
-          return [PSCustomObject]@{
-            path = $Path
-            exists = $true
-            signature_status = [string]$sig.Status
-            has_2011 = $has2011
-            has_2023 = $has2023
-            chain = $chainItems
-          }
-          }
-
-          $secureBoot = $null
-          try { $secureBoot = [bool](Confirm-SecureBootUEFI) } catch { $secureBoot = $false }
-
-          $vars = @{}
-          foreach ($name in "PK","KEK","db","dbx") {
-          $vars[$name] = Get-SbVarSummary -Name $name
-          }
-
-          $espDrive = $null
-          foreach ($letter in "Z","Y","X","W","V") {
-          if (-not (Test-Path "$letter`:\")) {
-            $espDrive = "$letter`:"
-            break
-          }
-          }
-
-          $espMounted = $false
-          $activeBootloader = $null
-          if ($espDrive) {
-          mountvol $espDrive /S | Out-Null
-          if (Test-Path "$espDrive\EFI\Microsoft\Boot\bootmgfw.efi") {
-            $activeBootloader = "$espDrive\EFI\Microsoft\Boot\bootmgfw.efi"
-            $espMounted = $true
-          }
-          }
-
-          $fallbackBootloader = "$env:SystemRoot\Boot\EFI\bootmgfw.efi"
-          if (-not $activeBootloader -and (Test-Path $fallbackBootloader)) {
-          $activeBootloader = $fallbackBootloader
-          }
-
-          $bootloaderSummary = if ($activeBootloader) {
-          Get-CertChainSummary -Path $activeBootloader
-          } else {
-          [PSCustomObject]@{
-            path = ""
-            exists = $false
-            signature_status = ""
-            has_2011 = $false
-            has_2023 = $false
-            chain = @()
-          }
-          }
-
-          $dbHas2023 = [bool]($vars["db"].has_windows_uefi_ca_2023 -or $vars["db"].has_ms_uefi_ca_2023)
-          $kekHas2023 = [bool]$vars["KEK"].has_kek_2023
-          $decision = "PASS_OR_LOW_RISK"
-          $rootCause = ""
-          $fix = "Keep OS patched; retain evidence and rerun after monthly cumulative updates."
-
-          if (-not $secureBoot) {
-          $decision = "NON_COMPLIANT_OR_OUT_OF_SCOPE"
-          $rootCause = "Secure Boot is disabled or cannot be confirmed"
-          $fix = "Enable UEFI Secure Boot if policy requires it, then rerun assessment."
-          } elseif (-not $kekHas2023) {
-          $decision = "IMPACTED"
-          $rootCause = "KEK 2023 missing"
-          $fix = "Patch Windows, opt in, run Secure-Boot-Update, reboot twice. If still missing on VMware, check PK or regenerate NVRAM."
-          } elseif (-not $dbHas2023) {
-          $decision = "IMPACTED"
-          $rootCause = "db missing UEFI CA 2023"
-          $fix = "Patch Windows, opt in, run Secure-Boot-Update, reboot twice, rerun assessment."
+    
+              $dbHas2023 = [bool]($vars["db"].has_windows_uefi_ca_2023 -or $vars["db"].has_ms_uefi_ca_2023)
+              $kekHas2023 = [bool]$vars["KEK"].has_kek_2023
+              $decision = "PASS_OR_LOW_RISK"
+              $rootCause = ""
+              $fix = "Keep OS patched; retain evidence and rerun after monthly cumulative updates."
+    
+              if (-not $secureBoot) {
+              $decision = "NON_COMPLIANT_OR_OUT_OF_SCOPE"
+              $rootCause = "Secure Boot is disabled or cannot be confirmed"
+              $fix = "Enable UEFI Secure Boot if policy requires it, then rerun assessment."
+              } elseif (-not $kekHas2023) {
+              $decision = "IMPACTED"
+              $rootCause = "KEK 2023 missing"
+              $fix = "Patch Windows, opt in, run Secure-Boot-Update, reboot twice. If still missing on VMware, check PK or regenerate NVRAM."
+              } elseif (-not $dbHas2023) {
+              $decision = "IMPACTED"
+              $rootCause = "db missing UEFI CA 2023"
+              $fix = "Patch Windows, opt in, run Secure-Boot-Update, reboot twice, rerun assessment."
           } elseif (-not $bootloaderSummary.exists) {
-          $decision = "NEEDS_MANUAL_REVIEW"
-          $rootCause = "Active Windows bootloader was not found"
-          $fix = "Verify EFI system partition and Windows Boot Manager entry."
-          } elseif ($bootloaderSummary.has_2011 -and -not $bootloaderSummary.has_2023) {
-          $decision = "IMPACTED_OR_PENDING_BOOTMGR_TRANSITION"
-          $rootCause = "Active bootloader chain appears to use 2011 CA only"
-          $fix = "After KEK/db 2023 are present, install latest cumulative update, trigger Secure-Boot-Update, reboot twice."
-          }
+          $decision = "BOOTLOADER_EFI_FILE_NOT_FOUND"
+          $rootCause = "bootmgfw.efi not found after mountvol ESP to first free letter Z..V and checking C:\Windows\Boot\EFI\bootmgfw.efi — possible: no free drive letter, BitLocker blocking ESP, deleted boot files, or non-standard Windows Boot layout."
+          $fix = "Free a drive letter for ESP, verify EFI System Partition with diskpart/bcdboot, repair Windows Boot Manager; see Microsoft docs for bcdboot / EFI recovery."
+              } elseif ($bootloaderSummary.has_2011 -and -not $bootloaderSummary.has_2023) {
+              $decision = "IMPACTED_OR_PENDING_BOOTMGR_TRANSITION"
+              $rootCause = "Active bootloader chain appears to use 2011 CA only"
+              $fix = "After KEK/db 2023 are present, install latest cumulative update, trigger Secure-Boot-Update, reboot twice."
+              }
+    
+              if ($espMounted -and $espDrive) {
+              mountvol $espDrive /D | Out-Null
+              }
+    
+              $bl2023 = [bool]$bootloaderSummary.has_2023
+              $bl2011 = [bool]$bootloaderSummary.has_2011
+              $ca2023Alignment = ""
+              $ca2023Summary = ""
+              if (-not $secureBoot) {
+              $ca2023Alignment = "SECUREBOOT_OFF_OR_UNKNOWN"
+              $ca2023Summary = "Secure Boot off or not confirmed; CA 2023 rollout state not assessed from this host."
+              } elseif (-not $kekHas2023 -or -not $dbHas2023) {
+              $ca2023Alignment = "FIRMWARE_MISSING_CA2023"
+              $ca2023Summary = "KEK and/or db does not yet show Microsoft UEFI CA 2023 as required; patch and Secure-Boot-Update before the platform is 2023-ready in NVRAM."
+              } elseif (-not $bootloaderSummary.exists) {
+              $ca2023Alignment = "ACTIVE_BOOTLOADER_UNRESOLVED"
+              $ca2023Summary = "NVRAM may be progressing but bootmgfw.efi was not found for signature inspection; verify ESP mount and boot entry."
+              } elseif ($bl2023) {
+              $ca2023Alignment = "ALIGNED_FW_AND_BOOTLOADER_SHOW_2023"
+              $ca2023Summary = "KEK+db include CA 2023 and the active bootmgfw authenticode chain references 2023 (aligned)."
+              } elseif ($bl2011 -and -not $bl2023) {
+              $ca2023Alignment = "STANDBY_FW_HAS_2023_BOOTLOADER_CHAIN_2011_ONLY"
+              $ca2023Summary = "NVRAM already contains Microsoft CA 2023 in KEK+db but bootmgfw chain still shows 2011 anchors only; common mid-transition—finish cumulative updates and Secure-Boot-Update with reboots; not the same risk as missing firmware CA 2023."
+              } else {
+              $ca2023Alignment = "BOOTLOADER_CHAIN_UNCLEAR"
+              $ca2023Summary = "Firmware variables include CA 2023 but bootloader signature classification is unclear; review authenticode chain manually."
+              }
+    
+              $operationalInterpretation = if (-not $secureBoot) {
+              "Secure Boot off or unknown: does not assess UEFI-enforced boot or CA migration under SB."
+              } elseif (-not $bootloaderSummary.exists) {
+              "bootmgfw.efi not resolved: cannot relate policy to an on-disk boot manager file."
+              } elseif ($decision -like "IMPACTED*" -or $decision -like "*PENDING*" -or $decision -like "*VENDOR*") {
+              "Addresses firmware db/kek vs Authenticode chain on bootmgfw; catalog-vs-embedded Authenticode caveats apply. Indicates policy/migration gap, not a guaranteed immediate boot failure—validate after updates and reboot tests."
+          } elseif ($decision -eq "BOOTLOADER_EFI_FILE_NOT_FOUND") {
+          "bootmgfw.efi was not found at expected ESP or OS fallback paths; policy vs Authenticode chain cannot be evaluated until the file exists."
+              } elseif ($decision -eq "PASS_OR_LOW_RISK") {
+              "NVRAM + bootmgfw chain snapshot consistent with low policy concern; does not model future revocation or embedded-vs-catalog nuances without manual review."
+              } else {
+              "Based on Get-SecureBootUEFI (NVRAM) and Get-AuthenticodeSignature/X509Chain on bootmgfw.efi. Interprets CA rollout impact only; does not guarantee next reboot behavior (see Authenticode catalog limitations)."
+              }
+    
+              [PSCustomObject]@{
+              host = $env:COMPUTERNAME
+              os_family = "windows"
+              secure_boot_enabled = $secureBoot
+              db_has_2011 = [bool]$vars["db"].has_2011
+              db_has_2023 = $dbHas2023
+              kek_has_2023 = $kekHas2023
+              dbx_readable = [bool]$vars["dbx"].readable
+              active_bootloader_file = [string]$bootloaderSummary.path
+              active_bootloader_source = $(if ($bootloaderSummary.path -match "^[A-Z]:\\EFI\\Microsoft\\Boot") { "ESP" } else { "OS_FALLBACK" })
+              active_bootloader_has_2011 = [bool]$bootloaderSummary.has_2011
+              active_bootloader_has_2023 = [bool]$bootloaderSummary.has_2023
+              active_bootloader_signature_method = "windows_authenticode"
+              ca2023_alignment = $ca2023Alignment
+              ca2023_summary = $ca2023Summary
+              bootloader_signature_status = [string]$bootloaderSummary.signature_status
+              bootloader_chain = $bootloaderSummary.chain
+              variables = $vars
+              decision = $decision
+              root_cause = $rootCause
+              fix = $fix
+              operational_interpretation = $operationalInterpretation
+              } | ConvertTo-Json -Depth 8 -Compress
+          register: windows_assessment_raw
+          changed_when: false
 
-          if ($espMounted -and $espDrive) {
-          mountvol $espDrive /D | Out-Null
-          }
-
-          $bl2023 = [bool]$bootloaderSummary.has_2023
-          $bl2011 = [bool]$bootloaderSummary.has_2011
-          $ca2023Alignment = ""
-          $ca2023Summary = ""
-          if (-not $secureBoot) {
-          $ca2023Alignment = "SECUREBOOT_OFF_OR_UNKNOWN"
-          $ca2023Summary = "Secure Boot off or not confirmed; CA 2023 rollout state not assessed from this host."
-          } elseif (-not $kekHas2023 -or -not $dbHas2023) {
-          $ca2023Alignment = "FIRMWARE_MISSING_CA2023"
-          $ca2023Summary = "KEK and/or db does not yet show Microsoft UEFI CA 2023 as required; patch and Secure-Boot-Update before the platform is 2023-ready in NVRAM."
-          } elseif (-not $bootloaderSummary.exists) {
-          $ca2023Alignment = "ACTIVE_BOOTLOADER_UNRESOLVED"
-          $ca2023Summary = "NVRAM may be progressing but bootmgfw.efi was not found for signature inspection; verify ESP mount and boot entry."
-          } elseif ($bl2023) {
-          $ca2023Alignment = "ALIGNED_FW_AND_BOOTLOADER_SHOW_2023"
-          $ca2023Summary = "KEK+db include CA 2023 and the active bootmgfw authenticode chain references 2023 (aligned)."
-          } elseif ($bl2011 -and -not $bl2023) {
-          $ca2023Alignment = "STANDBY_FW_HAS_2023_BOOTLOADER_CHAIN_2011_ONLY"
-          $ca2023Summary = "NVRAM already contains Microsoft CA 2023 in KEK+db but bootmgfw chain still shows 2011 anchors only; common mid-transition—finish cumulative updates and Secure-Boot-Update with reboots; not the same risk as missing firmware CA 2023."
-          } else {
-          $ca2023Alignment = "BOOTLOADER_CHAIN_UNCLEAR"
-          $ca2023Summary = "Firmware variables include CA 2023 but bootloader signature classification is unclear; review authenticode chain manually."
-          }
-
-          $operationalInterpretation = if (-not $secureBoot) {
-          "Secure Boot off or unknown: does not assess UEFI-enforced boot or CA migration under SB."
-          } elseif (-not $bootloaderSummary.exists) {
-          "bootmgfw.efi not resolved: cannot relate policy to an on-disk boot manager file."
-          } elseif ($decision -like "IMPACTED*" -or $decision -like "*PENDING*" -or $decision -like "*VENDOR*") {
-          "Addresses firmware db/kek vs Authenticode chain on bootmgfw; catalog-vs-embedded Authenticode caveats apply. Indicates policy/migration gap, not a guaranteed immediate boot failure—validate after updates and reboot tests."
-          } elseif ($decision -eq "NEEDS_MANUAL_REVIEW") {
-          "Evidence gap: cannot confirm CA alignment on the active bootloader path from this run alone."
-          } elseif ($decision -eq "PASS_OR_LOW_RISK") {
-          "NVRAM + bootmgfw chain snapshot consistent with low policy concern; does not model future revocation or embedded-vs-catalog nuances without manual review."
-          } else {
-          "Based on Get-SecureBootUEFI (NVRAM) and Get-AuthenticodeSignature/X509Chain on bootmgfw.efi. Interprets CA rollout impact only; does not guarantee next reboot behavior (see Authenticode catalog limitations)."
-          }
-
-          [PSCustomObject]@{
-          host = $env:COMPUTERNAME
-          os_family = "windows"
-          secure_boot_enabled = $secureBoot
-          db_has_2011 = [bool]$vars["db"].has_2011
-          db_has_2023 = $dbHas2023
-          kek_has_2023 = $kekHas2023
-          dbx_readable = [bool]$vars["dbx"].readable
-          active_bootloader_file = [string]$bootloaderSummary.path
-          active_bootloader_source = $(if ($bootloaderSummary.path -match "^[A-Z]:\\EFI\\Microsoft\\Boot") { "ESP" } else { "OS_FALLBACK" })
-          active_bootloader_has_2011 = [bool]$bootloaderSummary.has_2011
-          active_bootloader_has_2023 = [bool]$bootloaderSummary.has_2023
-          active_bootloader_signature_method = "windows_authenticode"
-          ca2023_alignment = $ca2023Alignment
-          ca2023_summary = $ca2023Summary
-          bootloader_signature_status = [string]$bootloaderSummary.signature_status
-          bootloader_chain = $bootloaderSummary.chain
-          variables = $vars
-          decision = $decision
-          root_cause = $rootCause
-          fix = $fix
-          operational_interpretation = $operationalInterpretation
-          } | ConvertTo-Json -Depth 8 -Compress
-      register: windows_assessment_raw
-      changed_when: false
-
-    - name: Store Windows assessment fact
-      ansible.builtin.set_fact:
-        secureboot_assessment: "{{ windows_assessment_raw.stdout | from_json }}"
+        - name: Store Windows assessment fact
+          ansible.builtin.set_fact:
+            secureboot_assessment: "{{ windows_assessment_raw.stdout | from_json }}"
+      rescue:
+        - name: Record Windows assessment exception
+          ansible.builtin.set_fact:
+            secureboot_assessment:
+              os_family: windows
+              failure_category: assessment_script
+              decision: ASSESSMENT_EXCEPTION
+              root_cause: "{{ ansible_failed_result.msg | default('unknown') | string | regex_replace('\r?\n', ' ') | truncate(1800) }}"
+              fix: "Check WinRM, credentials, execution policy, guest health; rerun with -vvv and inspect task stderr."
+              operational_interpretation: "Guest was reachable over WinRM but the assessment shell or JSON parse failed."
+              secure_boot_enabled: ""
+              db_has_2011: ""
+              db_has_2023: ""
+              kek_has_2023: ""
+              dbx_readable: ""
+              active_bootloader_file: ""
+              active_bootloader_has_2011: ""
+              active_bootloader_has_2023: ""
+              active_bootloader_signature_method: ""
+              active_bootloader_source: ""
+              bootloader_signature_status: ""
+              ca2023_alignment: ASSESSMENT_EXCEPTION
+              ca2023_summary: WinRM assessment task failed or returned invalid JSON.
 
 # Linux: mokutil + sbverify --list (from sbsigntools package only). See docs/18.
 - name: Assess Linux Secure Boot CA state
   hosts: linux
   gather_facts: false
   become: true
+  ignore_unreachable: true
   # SLES minimal images often lack sudo (use su + root password). Ubuntu/RHEL typically use sudo.
   become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
+  vars:
+    _cm: "{{ hostvars['localhost'].secureboot_connectivity_map | default({}) }}"
   tasks:
-    - name: Collect Linux Secure Boot DB and bootloader CA evidence
-      ansible.builtin.shell:
-        cmd: |
-          set +e
-          python3 - <<'PY'
-          import glob
-          import json
-          import os
-          import re
-          import subprocess
-          import sys
-
-          def run(cmd):
-            kw = {"shell": True, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
-            if sys.version_info >= (3, 7):
-              kw["text"] = True
-            else:
-              kw["universal_newlines"] = True
-            proc = subprocess.run(cmd, **kw)
-            out = proc.stdout
-            return (out or "").strip()
-
-          def run_rc(cmd):
-            """Return (exit_code, combined stdout+stderr text) for sbverify etc."""
-            kw = {"shell": True, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
-            if sys.version_info >= (3, 7):
-              kw["text"] = True
-            else:
-              kw["universal_newlines"] = True
-            proc = subprocess.run(cmd, **kw)
-            return proc.returncode, (proc.stdout or "").strip()
-
-          def has(pattern, text):
-            return bool(re.search(pattern, text or "", re.I))
-
-          def _mokutil_summary_line(line):
-            s = line.strip()
-            return (
-                s.startswith("[key")
-                or s.startswith("Owner:")
-                or s.startswith("SHA1 Fingerprint:")
-                or s.startswith("Issuer:")
-                or s.startswith("Subject:")
-                or s.startswith("Not Before")
-                or s.startswith("Not After")
-            )
-
-          def sb_var(name):
-            text = run(f"mokutil --{name} 2>&1")
-            return {
-                "name": name,
-                "readable": bool(text) and not has(r"not supported|failed|error", text),
-                "has_2011": has(r"2011|Windows Production PCA|Microsoft Corporation UEFI CA 2011|Microsoft Corporation KEK CA 2011", text),
-                "has_2023": has(r"2023|Windows UEFI CA 2023|Microsoft UEFI CA 2023|Microsoft Corporation KEK 2K CA 2023", text),
-                "has_kek_2023": has(r"Microsoft Corporation KEK 2K CA 2023", text),
-                "has_windows_uefi_ca_2023": has(r"Windows UEFI CA 2023", text),
-                "has_ms_uefi_ca_2023": has(r"Microsoft UEFI CA 2023", text),
-                "has_option_rom_2023": has(r"Microsoft Option ROM UEFI CA 2023", text),
-                "summary": "\\n".join(line for line in text.splitlines() if _mokutil_summary_line(line))[:12000],
-            }
-
-          def _boot_current_hex(text):
-            for line in text.splitlines():
-                ls = line.strip()
-                if ls.lower().startswith("bootcurrent:"):
-                    val = ls.split(":", 1)[1].strip()
-                    if not val:
-                        return ""
-                    if val.lower().startswith("0x"):
-                        val = val[2:]
-                    try:
-                        num = int(val, 16)
-                    except ValueError:
-                        try:
-                            num = int(val, 10)
-                        except ValueError:
-                            return ""
-                    return f"{num:04X}"
-            return ""
-
-          def efi_esp_mount():
-            """Where the ESP is mounted (RHEL often /boot/efi; some images use /efi)."""
-            for trial in ("/boot/efi", "/efi"):
-              t = run(f"findmnt -nro TARGET --target {trial} 2>/dev/null").strip()
-              if not t:
-                t = trial
-              t = t.rstrip("/")
-              if os.path.isdir(os.path.join(t, "EFI")):
-                return t
-            return "/boot/efi"
-
-          def _host_path_from_boot_description(desc, esp_root):
-            if not desc:
-              return ""
-            m = re.search(r"File\\(([^)]+)\\)", desc, re.I)
-            inner = m.group(1).strip() if m else ""
-            if not inner:
-              # RHEL/Fedora efibootmgr: HD(1,GPT,...)/\EFI\redhat\shimx64.efi (no File() wrapper)
-              m_hd = re.search(r"HD\\([^)]+\\)/(.+?\\.efi)", desc, re.I | re.S)
-              if m_hd:
-                inner = m_hd.group(1).strip()
-            if not inner:
-              m2 = re.search(r"([\\/]EFI[\\/].+\.efi)", desc, re.I)
-              inner = (m2.group(1).strip() if m2 else "")
-            if not inner:
-              m3 = re.search(r"EFI[\\/].+\.efi", desc, re.I)
-              inner = (m3.group(0).strip() if m3 else "")
-            if not inner:
-              return ""
-            inner = inner.replace(chr(92), "/")
-            if not inner.startswith("/"):
-              inner = "/" + inner.lstrip("/")
-            if inner.upper().startswith("/EFI"):
-              return esp_root + inner
-            if inner.upper().startswith("EFI/"):
-              return esp_root + "/" + inner
-            return ""
-
-          def _first_bootorder_hex(text):
-            for line in text.splitlines():
-              ls = line.strip()
-              if not ls.lower().startswith("bootorder:"):
-                continue
-              rest = ls.split(":", 1)[1].strip()
-              if not rest:
-                return ""
-              first = rest.split(",")[0].strip()
-              val = first
-              if val.lower().startswith("0x"):
-                val = val[2:]
-              try:
-                num = int(val, 16)
-              except ValueError:
-                try:
-                  num = int(val, 10)
-                except ValueError:
+    - name: Guest Secure Boot assessment via SSH
+      when:
+        - (_cm[inventory_hostname] | default({})).ssh_ok | default(false)
+        - not (secureboot_pkg_failed | default(false))
+      block:
+        - name: Collect Linux Secure Boot DB and bootloader CA evidence
+          ansible.builtin.shell:
+            cmd: |
+                set +e
+                python3 - <<'PY'
+                import glob
+                import json
+                import os
+                import re
+                import subprocess
+                import sys
+      
+                def run(cmd):
+                  kw = {"shell": True, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
+                  if sys.version_info >= (3, 7):
+                    kw["text"] = True
+                  else:
+                    kw["universal_newlines"] = True
+                  proc = subprocess.run(cmd, **kw)
+                  out = proc.stdout
+                  return (out or "").strip()
+      
+                def run_rc(cmd):
+                  """Return (exit_code, combined stdout+stderr text) for sbverify etc."""
+                  kw = {"shell": True, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
+                  if sys.version_info >= (3, 7):
+                    kw["text"] = True
+                  else:
+                    kw["universal_newlines"] = True
+                  proc = subprocess.run(cmd, **kw)
+                  return proc.returncode, (proc.stdout or "").strip()
+      
+                def has(pattern, text):
+                  return bool(re.search(pattern, text or "", re.I))
+      
+                def _mokutil_summary_line(line):
+                  s = line.strip()
+                  return (
+                      s.startswith("[key")
+                      or s.startswith("Owner:")
+                      or s.startswith("SHA1 Fingerprint:")
+                      or s.startswith("Issuer:")
+                      or s.startswith("Subject:")
+                      or s.startswith("Not Before")
+                      or s.startswith("Not After")
+                  )
+      
+                def sb_var(name):
+                  text = run(f"mokutil --{name} 2>&1")
+                  return {
+                      "name": name,
+                      "readable": bool(text) and not has(r"not supported|failed|error", text),
+                      "has_2011": has(r"2011|Windows Production PCA|Microsoft Corporation UEFI CA 2011|Microsoft Corporation KEK CA 2011", text),
+                      "has_2023": has(r"2023|Windows UEFI CA 2023|Microsoft UEFI CA 2023|Microsoft Corporation KEK 2K CA 2023", text),
+                      "has_kek_2023": has(r"Microsoft Corporation KEK 2K CA 2023", text),
+                      "has_windows_uefi_ca_2023": has(r"Windows UEFI CA 2023", text),
+                      "has_ms_uefi_ca_2023": has(r"Microsoft UEFI CA 2023", text),
+                      "has_option_rom_2023": has(r"Microsoft Option ROM UEFI CA 2023", text),
+                      "summary": "\\n".join(line for line in text.splitlines() if _mokutil_summary_line(line))[:12000],
+                  }
+      
+                def _boot_current_hex(text):
+                  for line in text.splitlines():
+                      ls = line.strip()
+                      if ls.lower().startswith("bootcurrent:"):
+                          val = ls.split(":", 1)[1].strip()
+                          if not val:
+                              return ""
+                          if val.lower().startswith("0x"):
+                              val = val[2:]
+                          try:
+                              num = int(val, 16)
+                          except ValueError:
+                              try:
+                                  num = int(val, 10)
+                              except ValueError:
+                                  return ""
+                          return f"{num:04X}"
                   return ""
-              return f"{num:04X}"
-            return ""
+      
+                def efi_esp_mount():
+                  """Where the ESP is mounted (RHEL often /boot/efi; some images use /efi)."""
+                  for trial in ("/boot/efi", "/efi"):
+                    t = run(f"findmnt -nro TARGET --target {trial} 2>/dev/null").strip()
+                    if not t:
+                      t = trial
+                    t = t.rstrip("/")
+                    if os.path.isdir(os.path.join(t, "EFI")):
+                      return t
+                  return "/boot/efi"
+      
+                def _host_path_from_boot_description(desc, esp_root):
+                  if not desc:
+                    return ""
+                  m = re.search(r"File\\(([^)]+)\\)", desc, re.I)
+                  inner = m.group(1).strip() if m else ""
+                  if not inner:
+                    # RHEL/Fedora efibootmgr: HD(1,GPT,...)/\EFI\redhat\shimx64.efi (no File() wrapper)
+                    m_hd = re.search(r"HD\\([^)]+\\)/(.+?\\.efi)", desc, re.I | re.S)
+                    if m_hd:
+                      inner = m_hd.group(1).strip()
+                  if not inner:
+                    m2 = re.search(r"([\\/]EFI[\\/].+\.efi)", desc, re.I)
+                    inner = (m2.group(1).strip() if m2 else "")
+                  if not inner:
+                    m3 = re.search(r"EFI[\\/].+\.efi", desc, re.I)
+                    inner = (m3.group(0).strip() if m3 else "")
+                  if not inner:
+                    return ""
+                  inner = inner.replace(chr(92), "/")
+                  if not inner.startswith("/"):
+                    inner = "/" + inner.lstrip("/")
+                  if inner.upper().startswith("/EFI"):
+                    return esp_root + inner
+                  if inner.upper().startswith("EFI/"):
+                    return esp_root + "/" + inner
+                  return ""
+      
+                def _first_bootorder_hex(text):
+                  for line in text.splitlines():
+                    ls = line.strip()
+                    if not ls.lower().startswith("bootorder:"):
+                      continue
+                    rest = ls.split(":", 1)[1].strip()
+                    if not rest:
+                      return ""
+                    first = rest.split(",")[0].strip()
+                    val = first
+                    if val.lower().startswith("0x"):
+                      val = val[2:]
+                    try:
+                      num = int(val, 16)
+                    except ValueError:
+                      try:
+                        num = int(val, 10)
+                      except ValueError:
+                        return ""
+                    return f"{num:04X}"
+                  return ""
+      
+                def _boot_entry_block(text, boot_hex):
+                  """efibootmgr -v often wraps BootNNNN across lines; path may not be on the first line."""
+                  lines = text.splitlines()
+                  for i, line in enumerate(lines):
+                    if not re.match(rf"^Boot{boot_hex}\\b", line.strip(), re.I):
+                      continue
+                    block_lines = [line]
+                    for j in range(i + 1, len(lines)):
+                      nxt = lines[j]
+                      if re.match(r"^Boot[0-9A-F]{4}\\b", nxt.strip(), re.I):
+                        break
+                      block_lines.append(nxt)
+                    return chr(10).join(block_lines)
+                  return ""
+      
+                def _resolve_boot_entry(text, boot_hex, esp_root):
+                  if not boot_hex:
+                    return "", ""
+                  block = _boot_entry_block(text, boot_hex)
+                  if block:
+                    host_path = _host_path_from_boot_description(block, esp_root)
+                    if host_path:
+                      return host_path, block
+                  line_pat = re.compile(rf"^Boot{boot_hex}\\*?\\s+(.*)$", re.I)
+                  for line in text.splitlines():
+                    ls = line.strip()
+                    m = line_pat.match(ls)
+                    if not m:
+                      continue
+                    desc = m.group(1)
+                    host_path = _host_path_from_boot_description(desc, esp_root)
+                    if host_path:
+                      return host_path, desc
+                  return "", ""
+      
+                def active_efi_from_efibootmgr(text, esp_root):
+                  seen = []
+                  for hx in (_boot_current_hex(text), _first_bootorder_hex(text)):
+                    if not hx or hx in seen:
+                      continue
+                    seen.append(hx)
+                    hp, d = _resolve_boot_entry(text, hx, esp_root)
+                    if hp:
+                      return hp, d
+                  return "", ""
+      
+                def fallback_efi_bootloader(esp_root):
+                  patterns = [
+                    f"{esp_root}/EFI/*/shimx64.efi",
+                    f"{esp_root}/EFI/*/shim.efi",
+                    f"{esp_root}/EFI/*/shimaa64.efi",
+                  ]
+                  sh = []
+                  for pt in patterns:
+                    sh.extend(glob.glob(pt))
+                  sh = sorted({p for p in sh if os.path.isfile(p)})
+                  if len(sh) == 1:
+                      return sh[0], "fallback:single_shim_on_esp"
+                  if len(sh) > 1:
+                      for prefer in ("redhat", "centos", "fedora", "almalinux", "rocky", "eurolinux"):
+                        for cand in sh:
+                          if f"/EFI/{prefer}/" in cand.replace(chr(92), "/").lower():
+                            return cand, f"fallback:preferred_vendor_{prefer}"
+                      return sh[0], "fallback:first_shim_multi"
+                  gr = sorted(
+                    {p for p in glob.glob(f"{esp_root}/EFI/*/grubx64.efi") + glob.glob(f"{esp_root}/EFI/*/grubaa64.efi") if os.path.isfile(p)}
+                  )
+                  if not sh and len(gr) == 1:
+                      return gr[0], "fallback:single_grub_on_esp"
+                  if not sh and len(gr) > 1:
+                      for prefer in ("redhat", "centos", "fedora"):
+                        for cand in gr:
+                          if f"/EFI/{prefer}/" in cand.replace(chr(92), "/").lower():
+                            return cand, f"fallback:preferred_grub_{prefer}"
+                      return gr[0], "fallback:first_grub_multi"
+                  return "", ""
+      
+                def package_owner(path):
+                  if not path or not os.path.exists(path):
+                      return ""
+                  if run("command -v rpm"):
+                      return run(f"rpm -qf {json.dumps(path)}")
+                  if run("command -v dpkg"):
+                      return run(f"dpkg -S {json.dumps(path)}")
+                  return ""
+      
+                def signature(path):
+                  """PKCS#7 listing via sbverify (sbsigntools package) only — no heuristic binary scan."""
+                  pat_2011 = r"2011|Windows Production PCA|Microsoft Corporation UEFI CA 2011|Microsoft Corporation KEK CA 2011"
+                  pat_2023 = r"2023|Windows UEFI CA 2023|Microsoft UEFI CA 2023|Microsoft Corporation KEK 2K CA 2023|Option ROM UEFI CA 2023"
+                  if not path or not os.path.exists(path):
+                      return {"path": path, "exists": False, "has_2011": False, "has_2023": False, "text": "", "method": "none"}
+                  if not os.access(path, os.R_OK):
+                      return {"path": path, "exists": True, "has_2011": False, "has_2023": False, "text": "file not readable", "method": "unreadable"}
+                  if not run("command -v sbverify"):
+                      return {
+                          "path": path,
+                          "exists": True,
+                          "has_2011": False,
+                          "has_2023": False,
+                          "text": "sbverify not on PATH; install distro package sbsigntools (or Debian/Ubuntu sbsigntool) so PKCS#7 can be listed.",
+                          "method": "sbverify_not_installed",
+                      }
+                  rc, sb_out = run_rc(f"sbverify --list {json.dumps(path)} 2>&1")
+                  h1 = bool(has(pat_2011, sb_out))
+                  h3 = bool(has(pat_2023, sb_out))
+                  if rc != 0:
+                      method = "sbverify_failed"
+                  else:
+                      method = "sbverify"
+                  text = ("=== sbverify --list (rc=%s) ===" % rc) + chr(10) + (sb_out or "")[:11500]
+                  return {
+                      "path": path,
+                      "exists": True,
+                      "has_2011": h1,
+                      "has_2023": h3,
+                      "text": text[:12000],
+                      "method": method,
+                  }
+      
+                esp = efi_esp_mount()
+                sb_state = run("mokutil --sb-state 2>&1")
+                efibootmgr = run("efibootmgr -v 2>&1")
+                if not efibootmgr.strip() or "not supported" in efibootmgr.lower():
+                  efibootmgr = run("efibootmgr 2>&1") + chr(10) + run("efibootmgr -v 2>&1")
+                active_file, active_raw = active_efi_from_efibootmgr(efibootmgr, esp)
+                resolve_method = "efibootmgr"
+                if not active_file:
+                  active_file, active_raw = fallback_efi_bootloader(esp)
+                  if active_file:
+                    resolve_method = "fallback_esp_glob"
+                  else:
+                    resolve_method = "unresolved"
+                efi_files = sorted(glob.glob(esp + "/EFI/**/*.efi", recursive=True))
+                active_sig = signature(active_file)
+                variables = {name: sb_var(name) for name in ["pk", "kek", "db", "dbx"]}
+                db = variables["db"]
+                kek = variables["kek"]
+                dbx = variables["dbx"]
+                package_versions = ""
+                if run("command -v rpm"):
+                  package_versions = run("rpm -qa | grep -Ei '^(shim|shim-x64|grub2|kernel)-' || true")
+                elif run("command -v dpkg"):
+                  package_versions = run("dpkg -l shim-signed shim grub-efi-amd64-signed grub2-common linux-image-generic 2>/dev/null || true")
+      
+                owner = package_owner(active_file)
+                secure_boot_enabled = has(r"enabled", sb_state)
+                db_has_2023 = bool(db["has_windows_uefi_ca_2023"] or db["has_ms_uefi_ca_2023"])
+                decision = "PASS_OR_LOW_RISK"
+                root_cause = ""
+                fix = "Keep OS patched; retain evidence and rerun after boot-chain updates."
+      
+                if not secure_boot_enabled:
+                  decision = "NON_COMPLIANT_OR_OUT_OF_SCOPE"
+                  root_cause = "Secure Boot is disabled or cannot be confirmed"
+                  fix = "Enable UEFI Secure Boot if policy requires it, then rerun assessment."
+                elif not active_file:
+                  decision = "ACTIVE_BOOTLOADER_UNRESOLVED"
+                  root_cause = "Could not map BootCurrent/BootOrder from efibootmgr -v to a host path under the ESP (see efibootmgr_raw in JSON); efibootmgr missing, empty, nonstandard firmware output, or no shim/grub on ESP for fallback."
+                  fix = "Install efibootmgr, verify ESP is mounted, ensure vendor shim/grub packages and EFI entries exist; inspect efibootmgr_raw in the JSON report."
+                elif active_file and not os.path.exists(active_file):
+                  decision = "IMPACTED"
+                  root_cause = "Active EFI bootloader path does not exist on disk"
+                  fix = "Repair EFI boot entry or reinstall vendor shim/GRUB packages."
+                elif active_file and not owner:
+                  decision = "IMPACTED"
+                  root_cause = "Active EFI bootloader is not owned by an OS package"
+                  fix = "Reinstall/update vendor shim/GRUB packages and recreate EFI boot entry."
+                elif active_file and owner and active_sig.get("method") == "unreadable":
+                  decision = "NEEDS_EVIDENCE"
+                  root_cause = "Active EFI bootloader file exists but is not readable for sbverify"
+                  fix = "Check ESP mount and permissions; rerun with privileges that can read the EFI binary."
+                elif active_file and owner and active_sig.get("method") == "sbverify_not_installed":
+                  decision = "NEEDS_EVIDENCE"
+                  root_cause = "sbverify not available; install distro sbsigntools (RHEL: CRB/EPEL per policy; Debian/Ubuntu: sbsigntool)"
+                  fix = "Ensure the guest install play ran, or install the package manually, then rerun."
+                elif active_file and owner and active_sig.get("method") == "sbverify_failed":
+                  decision = "NEEDS_EVIDENCE"
+                  root_cause = "sbverify --list failed (non-zero exit) for the active bootloader; see active_bootloader_signature_text"
+                  fix = "Confirm the file is a valid signed EFI binary; update sbsigntools; inspect sbverify stderr/stdout in the report."
+                elif active_file and owner and active_sig.get("method") == "sbverify" and (not active_sig["has_2011"]) and (not active_sig["has_2023"]):
+                  decision = "NEEDS_EVIDENCE"
+                  root_cause = "sbverify --list did not match known Microsoft UEFI CA 2011/2023 markers in PKCS#7 output"
+                  fix = "Review the PKCS#7 listing in the report; confirm vendor shim/grub signing and CA rollout."
+                elif active_sig["has_2011"] and not active_sig["has_2023"]:
+                  decision = "IMPACTED_OR_VENDOR_CHAIN_REVIEW"
+                  root_cause = "Active EFI bootloader signature shows 2011 CA only"
+                  fix = "Update vendor shim/GRUB/kernel packages from supported repos, reboot twice, rerun assessment."
+      
+                bl2023 = bool(active_sig["has_2023"])
+                bl2011 = bool(active_sig["has_2011"])
+                ca2023_alignment = ""
+                ca2023_summary = ""
+                if not secure_boot_enabled:
+                  ca2023_alignment = "SECUREBOOT_OFF_OR_UNKNOWN"
+                  ca2023_summary = "Secure Boot off or not confirmed; CA 2023 rollout state not assessed from this host."
+                elif not db_has_2023 or not kek["has_kek_2023"]:
+                  ca2023_alignment = "FIRMWARE_MISSING_CA2023"
+                  ca2023_summary = "mokutil KEK/db does not yet show Microsoft UEFI CA 2023 as required; update firmware policy or packages before the platform is 2023-ready in NVRAM."
+                elif not active_file:
+                  ca2023_alignment = "ACTIVE_BOOTLOADER_UNRESOLVED"
+                  ca2023_summary = "NVRAM may be progressing but the active EFI bootloader path was not resolved; verify efibootmgr and ESP mount."
+                elif active_file and not os.path.exists(active_file):
+                  ca2023_alignment = "ACTIVE_BOOTLOADER_PATH_MISSING"
+                  ca2023_summary = "Bootloader path from efibootmgr does not exist on disk; repair EFI entries before interpreting CA 2023 vs bootloader."
+                elif active_file and not owner:
+                  ca2023_alignment = "BOOTLOADER_NOT_FROM_OS_PACKAGE"
+                  ca2023_summary = "KEK+db may show CA 2023 but the active EFI file is not owned by an OS package; remediate before trusting bootloader chain evidence."
+                elif active_sig.get("method") == "sbverify_not_installed" and db_has_2023 and kek["has_kek_2023"]:
+                  ca2023_alignment = "EVIDENCE_SBVERIFY_MISSING"
+                  ca2023_summary = "Firmware KEK/db show CA 2023 but sbverify (sbsigntools package) is not available; PKCS#7 on the active bootloader was not read."
+                elif active_sig.get("method") == "sbverify_failed" and db_has_2023 and kek["has_kek_2023"]:
+                  ca2023_alignment = "EVIDENCE_SBVERIFY_FAILED"
+                  ca2023_summary = "Firmware KEK/db show CA 2023 but sbverify --list did not complete successfully; see active_bootloader_signature_text."
+                elif not bl2023 and not bl2011 and db_has_2023 and kek["has_kek_2023"]:
+                  ca2023_alignment = "EVIDENCE_BOOTLOADER_CA_UNCLEAR"
+                  ca2023_summary = "Firmware KEK/db show CA 2023 but sbverify PKCS#7 output did not match CA 2011/2023 markers; review listing in the report."
+                elif bl2023:
+                  ca2023_alignment = "ALIGNED_FW_AND_BOOTLOADER_SHOW_2023"
+                  ca2023_summary = "KEK+db include CA 2023 and sbverify --list matches 2023 markers on the active bootloader."
+                elif bl2011 and not bl2023:
+                  ca2023_alignment = "STANDBY_FW_HAS_2023_BOOTLOADER_CHAIN_2011_ONLY"
+                  ca2023_summary = "mokutil shows Microsoft CA 2023 in KEK+db but sbverify --list on the active EFI file still shows 2011 anchors only; typical mid-transition—update shim/GRUB and reboot; not the same as missing firmware CA 2023."
+                else:
+                  ca2023_alignment = "BOOTLOADER_CHAIN_UNCLEAR"
+                  ca2023_summary = "Firmware variables include CA 2023 but bootloader PKCS#7 classification is unclear; review active_bootloader_signature_text."
+      
+                def operational_interpretation_linux():
+                  """Honest scope: what this scan can/cannot say about migration impact vs next reboot."""
+                  if not secure_boot_enabled:
+                    return "Secure Boot off or unknown: does not assess UEFI-enforced boot or CA migration under SB."
+                  if not active_file:
+                    return "Cannot map policy to an active EFI file: migration impact and boot chain are not assessed."
+                  if active_file and not os.path.exists(active_file):
+                    return "Boot entry references a missing file: likely boot break until repaired; CA labels are secondary."
+                  if active_file and not owner:
+                    return "EFI file not from an installed package: vendor-supported boot chain not established."
+                  m = active_sig.get("method", "")
+                  if m == "unreadable":
+                    return "EFI file unreadable: PKCS#7 not obtained; cannot substantiate CA alignment or infer reboot outcome."
+                  if m == "sbverify_not_installed":
+                    return "No PKCS#7 read (sbverify missing): cannot substantiate CA 2011/2023 on the running bootloader file. May still boot today; migration verdict requires sbsigntools."
+                  if m == "sbverify_failed":
+                    return "sbverify failed: incomplete PKCS#7; do not treat decision as proof of boot success or failure."
+                  if m == "sbverify" and (not active_sig["has_2011"]) and (not active_sig["has_2023"]):
+                    return "PKCS#7 present but CA markers unmatched: review raw listing; not enough to claim firmware/boot alignment."
+                  if decision.startswith("IMPACTED") or "VENDOR" in decision or "PENDING" in decision:
+                    return "Addresses Microsoft CA 2023 rollout / policy gap vs on-disk chain; not a guarantee of immediate boot failure—validate after vendor updates and reboot tests."
+                  if decision == "NEEDS_EVIDENCE":
+                    return "Evidence gap: alone cannot confirm migration impact or predict next reboot; remediate tooling/path then rerun."
+                  if decision == "PASS_OR_LOW_RISK":
+                    return "NVRAM + PKCS#7 snapshot consistent with low policy concern; does not model future revocation or hardware-specific dbx."
+                  return "Based on mokutil (firmware vars) and sbverify --list (package tool) on the resolved active EFI file owned by packages. Interprets CA rollout impact only; does not emulate firmware execution or guarantee next reboot."
+      
+                print(json.dumps({
+                  "host": os.uname().nodename,
+                  "os_family": "linux",
+                  "efi_esp_mount": esp,
+                  "secure_boot_enabled": secure_boot_enabled,
+                  "secure_boot_state": sb_state,
+                  "db_has_2011": bool(db["has_2011"]),
+                  "db_has_2023": db_has_2023,
+                  "kek_has_2023": bool(kek["has_kek_2023"]),
+                  "dbx_readable": bool(dbx["readable"]),
+                  "active_bootloader_file": active_file,
+                  "active_bootloader_raw": active_raw,
+                  "active_bootloader_resolve_method": resolve_method,
+                  "active_bootloader_owner": owner,
+                  "active_bootloader_has_2011": bool(active_sig["has_2011"]),
+                  "active_bootloader_has_2023": bool(active_sig["has_2023"]),
+                  "active_bootloader_signature_method": active_sig.get("method", ""),
+                  "ca2023_alignment": ca2023_alignment,
+                  "ca2023_summary": ca2023_summary,
+                  "active_bootloader_signature_text": active_sig["text"],
+                  "efi_files": efi_files,
+                  "package_versions": package_versions,
+                  "efibootmgr_raw": efibootmgr[:32000],
+                  "variables": variables,
+                  "decision": decision,
+                  "root_cause": root_cause,
+                  "fix": fix,
+                  "operational_interpretation": operational_interpretation_linux(),
+                }, separators=(",", ":")))
+                PY
+            args:
+              executable: /bin/sh
+          register: linux_assessment_raw
+          changed_when: false
 
-          def _boot_entry_block(text, boot_hex):
-            """efibootmgr -v often wraps BootNNNN across lines; path may not be on the first line."""
-            lines = text.splitlines()
-            for i, line in enumerate(lines):
-              if not re.match(rf"^Boot{boot_hex}\\b", line.strip(), re.I):
-                continue
-              block_lines = [line]
-              for j in range(i + 1, len(lines)):
-                nxt = lines[j]
-                if re.match(r"^Boot[0-9A-F]{4}\\b", nxt.strip(), re.I):
-                  break
-                block_lines.append(nxt)
-              return chr(10).join(block_lines)
-            return ""
-
-          def _resolve_boot_entry(text, boot_hex, esp_root):
-            if not boot_hex:
-              return "", ""
-            block = _boot_entry_block(text, boot_hex)
-            if block:
-              host_path = _host_path_from_boot_description(block, esp_root)
-              if host_path:
-                return host_path, block
-            line_pat = re.compile(rf"^Boot{boot_hex}\\*?\\s+(.*)$", re.I)
-            for line in text.splitlines():
-              ls = line.strip()
-              m = line_pat.match(ls)
-              if not m:
-                continue
-              desc = m.group(1)
-              host_path = _host_path_from_boot_description(desc, esp_root)
-              if host_path:
-                return host_path, desc
-            return "", ""
-
-          def active_efi_from_efibootmgr(text, esp_root):
-            seen = []
-            for hx in (_boot_current_hex(text), _first_bootorder_hex(text)):
-              if not hx or hx in seen:
-                continue
-              seen.append(hx)
-              hp, d = _resolve_boot_entry(text, hx, esp_root)
-              if hp:
-                return hp, d
-            return "", ""
-
-          def fallback_efi_bootloader(esp_root):
-            patterns = [
-              f"{esp_root}/EFI/*/shimx64.efi",
-              f"{esp_root}/EFI/*/shim.efi",
-              f"{esp_root}/EFI/*/shimaa64.efi",
-            ]
-            sh = []
-            for pt in patterns:
-              sh.extend(glob.glob(pt))
-            sh = sorted({p for p in sh if os.path.isfile(p)})
-            if len(sh) == 1:
-                return sh[0], "fallback:single_shim_on_esp"
-            if len(sh) > 1:
-                for prefer in ("redhat", "centos", "fedora", "almalinux", "rocky", "eurolinux"):
-                  for cand in sh:
-                    if f"/EFI/{prefer}/" in cand.replace(chr(92), "/").lower():
-                      return cand, f"fallback:preferred_vendor_{prefer}"
-                return sh[0], "fallback:first_shim_multi"
-            gr = sorted(
-              {p for p in glob.glob(f"{esp_root}/EFI/*/grubx64.efi") + glob.glob(f"{esp_root}/EFI/*/grubaa64.efi") if os.path.isfile(p)}
-            )
-            if not sh and len(gr) == 1:
-                return gr[0], "fallback:single_grub_on_esp"
-            if not sh and len(gr) > 1:
-                for prefer in ("redhat", "centos", "fedora"):
-                  for cand in gr:
-                    if f"/EFI/{prefer}/" in cand.replace(chr(92), "/").lower():
-                      return cand, f"fallback:preferred_grub_{prefer}"
-                return gr[0], "fallback:first_grub_multi"
-            return "", ""
-
-          def package_owner(path):
-            if not path or not os.path.exists(path):
-                return ""
-            if run("command -v rpm"):
-                return run(f"rpm -qf {json.dumps(path)}")
-            if run("command -v dpkg"):
-                return run(f"dpkg -S {json.dumps(path)}")
-            return ""
-
-          def signature(path):
-            """PKCS#7 listing via sbverify (sbsigntools package) only — no heuristic binary scan."""
-            pat_2011 = r"2011|Windows Production PCA|Microsoft Corporation UEFI CA 2011|Microsoft Corporation KEK CA 2011"
-            pat_2023 = r"2023|Windows UEFI CA 2023|Microsoft UEFI CA 2023|Microsoft Corporation KEK 2K CA 2023|Option ROM UEFI CA 2023"
-            if not path or not os.path.exists(path):
-                return {"path": path, "exists": False, "has_2011": False, "has_2023": False, "text": "", "method": "none"}
-            if not os.access(path, os.R_OK):
-                return {"path": path, "exists": True, "has_2011": False, "has_2023": False, "text": "file not readable", "method": "unreadable"}
-            if not run("command -v sbverify"):
-                return {
-                    "path": path,
-                    "exists": True,
-                    "has_2011": False,
-                    "has_2023": False,
-                    "text": "sbverify not on PATH; install distro package sbsigntools (or Debian/Ubuntu sbsigntool) so PKCS#7 can be listed.",
-                    "method": "sbverify_not_installed",
-                }
-            rc, sb_out = run_rc(f"sbverify --list {json.dumps(path)} 2>&1")
-            h1 = bool(has(pat_2011, sb_out))
-            h3 = bool(has(pat_2023, sb_out))
-            if rc != 0:
-                method = "sbverify_failed"
-            else:
-                method = "sbverify"
-            text = ("=== sbverify --list (rc=%s) ===" % rc) + chr(10) + (sb_out or "")[:11500]
-            return {
-                "path": path,
-                "exists": True,
-                "has_2011": h1,
-                "has_2023": h3,
-                "text": text[:12000],
-                "method": method,
-            }
-
-          esp = efi_esp_mount()
-          sb_state = run("mokutil --sb-state 2>&1")
-          efibootmgr = run("efibootmgr -v 2>&1")
-          if not efibootmgr.strip() or "not supported" in efibootmgr.lower():
-            efibootmgr = run("efibootmgr 2>&1") + chr(10) + run("efibootmgr -v 2>&1")
-          active_file, active_raw = active_efi_from_efibootmgr(efibootmgr, esp)
-          resolve_method = "efibootmgr"
-          if not active_file:
-            active_file, active_raw = fallback_efi_bootloader(esp)
-            if active_file:
-              resolve_method = "fallback_esp_glob"
-            else:
-              resolve_method = "unresolved"
-          efi_files = sorted(glob.glob(esp + "/EFI/**/*.efi", recursive=True))
-          active_sig = signature(active_file)
-          variables = {name: sb_var(name) for name in ["pk", "kek", "db", "dbx"]}
-          db = variables["db"]
-          kek = variables["kek"]
-          dbx = variables["dbx"]
-          package_versions = ""
-          if run("command -v rpm"):
-            package_versions = run("rpm -qa | grep -Ei '^(shim|shim-x64|grub2|kernel)-' || true")
-          elif run("command -v dpkg"):
-            package_versions = run("dpkg -l shim-signed shim grub-efi-amd64-signed grub2-common linux-image-generic 2>/dev/null || true")
-
-          owner = package_owner(active_file)
-          secure_boot_enabled = has(r"enabled", sb_state)
-          db_has_2023 = bool(db["has_windows_uefi_ca_2023"] or db["has_ms_uefi_ca_2023"])
-          decision = "PASS_OR_LOW_RISK"
-          root_cause = ""
-          fix = "Keep OS patched; retain evidence and rerun after boot-chain updates."
-
-          if not secure_boot_enabled:
-            decision = "NON_COMPLIANT_OR_OUT_OF_SCOPE"
-            root_cause = "Secure Boot is disabled or cannot be confirmed"
-            fix = "Enable UEFI Secure Boot if policy requires it, then rerun assessment."
-          elif not active_file:
-            decision = "NEEDS_MANUAL_REVIEW"
-            root_cause = "Cannot determine active EFI bootloader from efibootmgr"
-            fix = "Verify EFI boot entry and vendor shim path manually."
-          elif active_file and not os.path.exists(active_file):
-            decision = "IMPACTED"
-            root_cause = "Active EFI bootloader path does not exist on disk"
-            fix = "Repair EFI boot entry or reinstall vendor shim/GRUB packages."
-          elif active_file and not owner:
-            decision = "IMPACTED"
-            root_cause = "Active EFI bootloader is not owned by an OS package"
-            fix = "Reinstall/update vendor shim/GRUB packages and recreate EFI boot entry."
-          elif active_file and owner and active_sig.get("method") == "unreadable":
-            decision = "NEEDS_EVIDENCE"
-            root_cause = "Active EFI bootloader file exists but is not readable for sbverify"
-            fix = "Check ESP mount and permissions; rerun with privileges that can read the EFI binary."
-          elif active_file and owner and active_sig.get("method") == "sbverify_not_installed":
-            decision = "NEEDS_EVIDENCE"
-            root_cause = "sbverify not available; install distro sbsigntools (RHEL: CRB/EPEL per policy; Debian/Ubuntu: sbsigntool)"
-            fix = "Ensure the guest install play ran, or install the package manually, then rerun."
-          elif active_file and owner and active_sig.get("method") == "sbverify_failed":
-            decision = "NEEDS_EVIDENCE"
-            root_cause = "sbverify --list failed (non-zero exit) for the active bootloader; see active_bootloader_signature_text"
-            fix = "Confirm the file is a valid signed EFI binary; update sbsigntools; inspect sbverify stderr/stdout in the report."
-          elif active_file and owner and active_sig.get("method") == "sbverify" and (not active_sig["has_2011"]) and (not active_sig["has_2023"]):
-            decision = "NEEDS_EVIDENCE"
-            root_cause = "sbverify --list did not match known Microsoft UEFI CA 2011/2023 markers in PKCS#7 output"
-            fix = "Review the PKCS#7 listing in the report; confirm vendor shim/grub signing and CA rollout."
-          elif active_sig["has_2011"] and not active_sig["has_2023"]:
-            decision = "IMPACTED_OR_VENDOR_CHAIN_REVIEW"
-            root_cause = "Active EFI bootloader signature shows 2011 CA only"
-            fix = "Update vendor shim/GRUB/kernel packages from supported repos, reboot twice, rerun assessment."
-
-          bl2023 = bool(active_sig["has_2023"])
-          bl2011 = bool(active_sig["has_2011"])
-          ca2023_alignment = ""
-          ca2023_summary = ""
-          if not secure_boot_enabled:
-            ca2023_alignment = "SECUREBOOT_OFF_OR_UNKNOWN"
-            ca2023_summary = "Secure Boot off or not confirmed; CA 2023 rollout state not assessed from this host."
-          elif not db_has_2023 or not kek["has_kek_2023"]:
-            ca2023_alignment = "FIRMWARE_MISSING_CA2023"
-            ca2023_summary = "mokutil KEK/db does not yet show Microsoft UEFI CA 2023 as required; update firmware policy or packages before the platform is 2023-ready in NVRAM."
-          elif not active_file:
-            ca2023_alignment = "ACTIVE_BOOTLOADER_UNRESOLVED"
-            ca2023_summary = "NVRAM may be progressing but the active EFI bootloader path was not resolved; verify efibootmgr and ESP mount."
-          elif active_file and not os.path.exists(active_file):
-            ca2023_alignment = "ACTIVE_BOOTLOADER_PATH_MISSING"
-            ca2023_summary = "Bootloader path from efibootmgr does not exist on disk; repair EFI entries before interpreting CA 2023 vs bootloader."
-          elif active_file and not owner:
-            ca2023_alignment = "BOOTLOADER_NOT_FROM_OS_PACKAGE"
-            ca2023_summary = "KEK+db may show CA 2023 but the active EFI file is not owned by an OS package; remediate before trusting bootloader chain evidence."
-          elif active_sig.get("method") == "sbverify_not_installed" and db_has_2023 and kek["has_kek_2023"]:
-            ca2023_alignment = "EVIDENCE_SBVERIFY_MISSING"
-            ca2023_summary = "Firmware KEK/db show CA 2023 but sbverify (sbsigntools package) is not available; PKCS#7 on the active bootloader was not read."
-          elif active_sig.get("method") == "sbverify_failed" and db_has_2023 and kek["has_kek_2023"]:
-            ca2023_alignment = "EVIDENCE_SBVERIFY_FAILED"
-            ca2023_summary = "Firmware KEK/db show CA 2023 but sbverify --list did not complete successfully; see active_bootloader_signature_text."
-          elif not bl2023 and not bl2011 and db_has_2023 and kek["has_kek_2023"]:
-            ca2023_alignment = "EVIDENCE_BOOTLOADER_CA_UNCLEAR"
-            ca2023_summary = "Firmware KEK/db show CA 2023 but sbverify PKCS#7 output did not match CA 2011/2023 markers; review listing in the report."
-          elif bl2023:
-            ca2023_alignment = "ALIGNED_FW_AND_BOOTLOADER_SHOW_2023"
-            ca2023_summary = "KEK+db include CA 2023 and sbverify --list matches 2023 markers on the active bootloader."
-          elif bl2011 and not bl2023:
-            ca2023_alignment = "STANDBY_FW_HAS_2023_BOOTLOADER_CHAIN_2011_ONLY"
-            ca2023_summary = "mokutil shows Microsoft CA 2023 in KEK+db but sbverify --list on the active EFI file still shows 2011 anchors only; typical mid-transition—update shim/GRUB and reboot; not the same as missing firmware CA 2023."
-          else:
-            ca2023_alignment = "BOOTLOADER_CHAIN_UNCLEAR"
-            ca2023_summary = "Firmware variables include CA 2023 but bootloader PKCS#7 classification is unclear; review active_bootloader_signature_text."
-
-          def operational_interpretation_linux():
-            """Honest scope: what this scan can/cannot say about migration impact vs next reboot."""
-            if not secure_boot_enabled:
-              return "Secure Boot off or unknown: does not assess UEFI-enforced boot or CA migration under SB."
-            if not active_file:
-              return "Cannot map policy to an active EFI file: migration impact and boot chain are not assessed."
-            if active_file and not os.path.exists(active_file):
-              return "Boot entry references a missing file: likely boot break until repaired; CA labels are secondary."
-            if active_file and not owner:
-              return "EFI file not from an installed package: vendor-supported boot chain not established."
-            m = active_sig.get("method", "")
-            if m == "unreadable":
-              return "EFI file unreadable: PKCS#7 not obtained; cannot substantiate CA alignment or infer reboot outcome."
-            if m == "sbverify_not_installed":
-              return "No PKCS#7 read (sbverify missing): cannot substantiate CA 2011/2023 on the running bootloader file. May still boot today; migration verdict requires sbsigntools."
-            if m == "sbverify_failed":
-              return "sbverify failed: incomplete PKCS#7; do not treat decision as proof of boot success or failure."
-            if m == "sbverify" and (not active_sig["has_2011"]) and (not active_sig["has_2023"]):
-              return "PKCS#7 present but CA markers unmatched: review raw listing; not enough to claim firmware/boot alignment."
-            if decision.startswith("IMPACTED") or "VENDOR" in decision or "PENDING" in decision:
-              return "Addresses Microsoft CA 2023 rollout / policy gap vs on-disk chain; not a guarantee of immediate boot failure—validate after vendor updates and reboot tests."
-            if decision == "NEEDS_EVIDENCE":
-              return "Evidence gap: alone cannot confirm migration impact or predict next reboot; remediate tooling/path then rerun."
-            if decision == "PASS_OR_LOW_RISK":
-              return "NVRAM + PKCS#7 snapshot consistent with low policy concern; does not model future revocation or hardware-specific dbx."
-            return "Based on mokutil (firmware vars) and sbverify --list (package tool) on the resolved active EFI file owned by packages. Interprets CA rollout impact only; does not emulate firmware execution or guarantee next reboot."
-
-          print(json.dumps({
-            "host": os.uname().nodename,
-            "os_family": "linux",
-            "efi_esp_mount": esp,
-            "secure_boot_enabled": secure_boot_enabled,
-            "secure_boot_state": sb_state,
-            "db_has_2011": bool(db["has_2011"]),
-            "db_has_2023": db_has_2023,
-            "kek_has_2023": bool(kek["has_kek_2023"]),
-            "dbx_readable": bool(dbx["readable"]),
-            "active_bootloader_file": active_file,
-            "active_bootloader_raw": active_raw,
-            "active_bootloader_resolve_method": resolve_method,
-            "active_bootloader_owner": owner,
-            "active_bootloader_has_2011": bool(active_sig["has_2011"]),
-            "active_bootloader_has_2023": bool(active_sig["has_2023"]),
-            "active_bootloader_signature_method": active_sig.get("method", ""),
-            "ca2023_alignment": ca2023_alignment,
-            "ca2023_summary": ca2023_summary,
-            "active_bootloader_signature_text": active_sig["text"],
-            "efi_files": efi_files,
-            "package_versions": package_versions,
-            "efibootmgr_raw": efibootmgr[:32000],
-            "variables": variables,
-            "decision": decision,
-            "root_cause": root_cause,
-            "fix": fix,
-            "operational_interpretation": operational_interpretation_linux(),
-          }, separators=(",", ":")))
-          PY
-      args:
-        executable: /bin/sh
-      register: linux_assessment_raw
-      changed_when: false
-
-    - name: Store Linux assessment fact
-      ansible.builtin.set_fact:
-        secureboot_assessment: "{{ linux_assessment_raw.stdout | from_json }}"
+        - name: Store Linux assessment fact
+          ansible.builtin.set_fact:
+            secureboot_assessment: "{{ linux_assessment_raw.stdout | from_json }}"
+      rescue:
+        - name: Record Linux assessment exception
+          ansible.builtin.set_fact:
+            secureboot_assessment:
+              os_family: linux
+              failure_category: assessment_script
+              decision: ASSESSMENT_EXCEPTION
+              root_cause: "{{ ansible_failed_result.msg | default('unknown') | string | regex_replace('\r?\n', ' ') | truncate(1800) }}"
+              fix: "Check SSH, sudo/su, python3, mokutil, guest disk/ESP; rerun with -vvv."
+              operational_interpretation: "Guest was reachable over SSH but the assessment shell or JSON parse failed."
+              secure_boot_enabled: ""
+              db_has_2011: ""
+              db_has_2023: ""
+              kek_has_2023: ""
+              dbx_readable: ""
+              active_bootloader_file: ""
+              active_bootloader_has_2011: ""
+              active_bootloader_has_2023: ""
+              active_bootloader_signature_method: ""
+              active_bootloader_resolve_method: ""
+              bootloader_signature_status: ""
+              ca2023_alignment: ASSESSMENT_EXCEPTION
+              ca2023_summary: SSH assessment task failed or returned invalid JSON.
 
 - name: Write controller reports
   hosts: localhost
@@ -749,6 +866,7 @@
     report_dir: "{{ playbook_dir }}/../reports"
     report_json: "{{ report_dir }}/secureboot_ca_assessment.json"
     report_csv: "{{ report_dir }}/secureboot_ca_assessment.csv"
+    _report_hosts: "{{ ((groups['windows'] | default([])) + (groups['linux'] | default([]))) | unique | sort }}"
   tasks:
     - name: Ensure report directory exists
       ansible.builtin.file:
@@ -762,10 +880,20 @@
         mode: "0644"
         content: |
           [
-          {% for host in groups['all'] | difference(['localhost']) | sort %}
+          {% for host in _report_hosts %}
           {% if hostvars[host].secureboot_assessment is defined %}
-          {{ hostvars[host].secureboot_assessment | combine({'inventory_host': host}) | to_nice_json }}{% if not loop.last %},{% endif %}
+          {{ hostvars[host].secureboot_assessment | combine({'inventory_host': host}) | to_nice_json }}
+          {% else %}
+          {% set row = (hostvars['localhost'].secureboot_connectivity_map | default({}))[host] | default({}) %}
+          {% if host in (groups['windows'] | default([])) and not (row.winrm_ok | default(false)) %}
+          {{ {'inventory_host': host, 'os_family': 'windows', 'failure_category': 'connectivity', 'decision': 'CONNECTIVITY_FAILED', 'ca2023_alignment': 'CONNECTIVITY_FAILED', 'ca2023_summary': 'No in-guest assessment: WinRM did not succeed.', 'root_cause': 'WinRM/transport failed (unreachable, timeout, auth, listener): ' ~ (row.winrm_msg | default('no detail') | string), 'fix': 'Fix DNS/firewall/5985-5986, credential, WinRM service, TLS; confirm ansible_host and inventory.', 'operational_interpretation': 'ICMP from controller: ' ~ (row.icmp_msg | default('') | truncate(500) if not (row.icmp_ok | default(false)) else 'ok (many sites block ICMP while WinRM still works)'), 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': '', 'active_bootloader_source': '', 'bootloader_signature_status': ''} | to_nice_json }}
+          {% elif host in (groups['linux'] | default([])) and not (row.ssh_ok | default(false)) %}
+          {{ {'inventory_host': host, 'os_family': 'linux', 'failure_category': 'connectivity', 'decision': 'CONNECTIVITY_FAILED', 'ca2023_alignment': 'CONNECTIVITY_FAILED', 'ca2023_summary': 'No in-guest assessment: SSH did not succeed.', 'root_cause': 'SSH failed (unreachable, timeout, auth, or missing Python): ' ~ (row.ssh_msg | default('no detail') | string), 'fix': 'Fix DNS/firewall:22, ansible_user/key/password, sudo; confirm ansible_host.', 'operational_interpretation': 'ICMP from controller: ' ~ (row.icmp_msg | default('') | truncate(500) if not (row.icmp_ok | default(false)) else 'ok'), 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': '', 'active_bootloader_resolve_method': '', 'bootloader_signature_status': ''} | to_nice_json }}
+          {% else %}
+          {{ {'inventory_host': host, 'os_family': ('windows' if host in (groups['windows'] | default([])) else 'linux'), 'failure_category': 'report_gap', 'decision': 'REPORT_GAP', 'ca2023_alignment': 'REPORT_GAP', 'ca2023_summary': 'No assessment fact and connectivity map did not explain the gap.', 'root_cause': 'Playbook did not record secureboot_assessment and transport appeared OK — check earlier task stderr with -vvv.', 'fix': 'Re-run this play; if it persists, file a bug with ansible log.', 'operational_interpretation': 'Unexpected gap; not a policy classification.', 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': ''} | to_nice_json }}
           {% endif %}
+          {% endif %}
+          {% if not loop.last %},{% endif %}
           {% endfor %}
           ]
 
@@ -774,11 +902,23 @@
         dest: "{{ report_csv }}"
         mode: "0644"
         content: |
-          inventory_host,os_family,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,active_bootloader_signature_method,ca2023_alignment,ca2023_summary,decision,root_cause,fix,operational_interpretation
-          {% for host in groups['all'] | difference(['localhost']) | sort %}
+          inventory_host,os_family,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,active_bootloader_signature_method,active_bootloader_path_resolution,code_signature_status,failure_category,ca2023_alignment,ca2023_summary,decision,root_cause,fix,operational_interpretation
+          {% for host in _report_hosts %}
           {% set a = hostvars[host].secureboot_assessment | default({}) %}
           {% if a %}
-          {{ host }},{{ a.os_family | default('') }},{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},"{{ (a.active_bootloader_signature_method | default('')) | replace('"', '""') }}","{{ (a.ca2023_alignment | default('')) | replace('"', '""') }}","{{ (a.ca2023_summary | default('')) | replace('"', '""') }}",{{ a.decision | default('') }},"{{ (a.root_cause | default('')) | replace('"', '""') }}","{{ (a.fix | default('')) | replace('"', '""') }}","{{ (a.operational_interpretation | default('')) | replace('"', '""') }}"
+          {% set path_res = a.active_bootloader_resolve_method | default(a.active_bootloader_source | default('')) %}
+          {{ host }},{{ a.os_family | default('') }},{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},"{{ (a.active_bootloader_signature_method | default('')) | replace('"', '""') }}","{{ path_res | replace('"', '""') }}","{{ (a.bootloader_signature_status | default('')) | replace('"', '""') }}","{{ (a.failure_category | default('')) | replace('"', '""') }}","{{ (a.ca2023_alignment | default('')) | replace('"', '""') }}","{{ (a.ca2023_summary | default('')) | replace('"', '""') }}",{{ a.decision | default('') }},"{{ (a.root_cause | default('')) | replace('"', '""') }}","{{ (a.fix | default('')) | replace('"', '""') }}","{{ (a.operational_interpretation | default('')) | replace('"', '""') }}"
+          {% else %}
+          {% set row = (hostvars['localhost'].secureboot_connectivity_map | default({}))[host] | default({}) %}
+          {% if host in (groups['windows'] | default([])) and not (row.winrm_ok | default(false)) %}
+          {% set icmp_txt = (row.icmp_msg | default('') | truncate(400)) if not (row.icmp_ok | default(false)) else 'ok (ICMP may be blocked while WinRM works)' %}
+          {{ host }},windows,,,,,,"",,,,"","","connectivity","CONNECTIVITY_FAILED","No in-guest assessment: WinRM did not succeed.",CONNECTIVITY_FAILED,"{{ ('WinRM/transport failed: ' ~ (row.winrm_msg | default(''))) | replace('"', '""') }}","Fix DNS/firewall/WinRM listener and credentials; confirm ansible_host.","{{ ('ICMP from controller: ' ~ icmp_txt) | replace('"', '""') }}"
+          {% elif host in (groups['linux'] | default([])) and not (row.ssh_ok | default(false)) %}
+          {% set icmp_txt = (row.icmp_msg | default('') | truncate(400)) if not (row.icmp_ok | default(false)) else 'ok' %}
+          {{ host }},linux,,,,,,"",,,,"","","connectivity","CONNECTIVITY_FAILED","No in-guest assessment: SSH did not succeed.",CONNECTIVITY_FAILED,"{{ ('SSH failed: ' ~ (row.ssh_msg | default(''))) | replace('"', '""') }}","Fix SSH port, keys, sudo, ansible_user.","{{ ('ICMP from controller: ' ~ icmp_txt) | replace('"', '""') }}"
+          {% else %}
+          {{ host }},,,,,,,"",,,,"","","report_gap","REPORT_GAP","Unexpected reporting gap.",REPORT_GAP,"No secureboot_assessment and transport looked OK — see -vvv log.","",""
+          {% endif %}
           {% endif %}
           {% endfor %}
 

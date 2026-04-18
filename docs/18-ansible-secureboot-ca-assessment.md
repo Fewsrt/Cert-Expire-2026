@@ -80,7 +80,7 @@ This section summarizes **what the playbook uses**, **what you may need to insta
 | What is measured | Tool in guest | One install path (playbook) |
 |---|---|---|
 | Firmware variables (`db`, `KEK`, …) | `mokutil` | Preinstalled (`mokutil` package). |
-| Active EFI binary — PKCS#7 | `sbverify --list` only | From distro packages below (no scanning raw EFI bytes in the assessment). |
+| Active EFI binary — PE signature | `sbverify --list` first, else `pesign -i file -S` | From distro packages `sbsigntools`/`sbsigntool` and `pesign` (no scanning raw EFI bytes). |
 
 **One package path per OS (what the playbook installs):**
 
@@ -126,7 +126,7 @@ The CSV report includes:
 | `active_bootloader_file` | The EFI file considered active |
 | `active_bootloader_has_2011` | Active bootloader certificate chain contains 2011 CA text |
 | `active_bootloader_has_2023` | Active bootloader certificate chain contains 2023 CA text |
-| `active_bootloader_signature_method` | Linux: `sbverify` (PKCS#7 from `sbverify --list`), `sbverify_failed`, `sbverify_not_installed`, `unreadable`, `none`. Windows: `windows_authenticode` |
+| `active_bootloader_signature_method` | Linux: `sbverify`, `sbverify_failed`, `pesign`, `pesign_failed`, `sbverify_not_installed` (neither tool on PATH), `unreadable`, `none`. Windows: `windows_authenticode` |
 | `decision` | `PASS_OR_LOW_RISK`, `IMPACTED`, `NEEDS_EVIDENCE`, `NEEDS_MANUAL_REVIEW`, or related final state |
 | `root_cause` | Why the host is not pass/low-risk |
 | `fix` | The remediation workflow for that host |
@@ -167,7 +167,7 @@ Active file:
 /boot/efi/EFI/redhat/shimx64.efi
 ```
 
-`active_bootloader_has_2011` / `active_bootloader_has_2023` come **only** from **`sbverify --list`** (PKCS#7 text) after the **`sbsigntools` / `sbsigntool`** package is installed. There is **no** raw-binary or strings heuristic. If `sbverify` is missing or fails, the row is typically `NEEDS_EVIDENCE` until the package is available and listing succeeds. **`operational_interpretation`** explains whether that row is sufficient to answer policy/migration questions and explicitly limits claims about **next-reboot boot success** (not proven by this scan).
+`active_bootloader_has_2011` / `active_bootloader_has_2023` come from **`sbverify --list`** when it succeeds; if `sbverify` is absent or non-zero, the playbook uses **`pesign -i … -S`** (same CA regex on tool output). Both are **distro packages** — no raw-binary heuristic. If both are missing or fail, the row is typically `NEEDS_EVIDENCE`. **`operational_interpretation`** limits claims about **next-reboot boot success**.
 
 ## Remediation Mapping
 

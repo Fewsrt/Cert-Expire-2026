@@ -1,7 +1,11 @@
 # Included by secureboot_ca_assessment.yml and install_sbsigntools_linux.yml.
 # Requires gather_facts (os_family) on the play.
-# One package path per OS family — installs sbsigntools from distro repos only (sbverify for PKCS#7).
-# Optional override: -e sbsigntools_package_name=exact-package-name
+# Primary: sbsigntools/sbsigntool (sbverify --list). Fallback: pesign (pesign -i file -S) — both from distro packages.
+#
+# Optional:
+#   -e sbsigntools_package_name=...           (force exact package name)
+#   -e secureboot_install_epel_for_sbsigntools=true   (always add EPEL on RHEL 8+ before install)
+#   -e secureboot_auto_epel_if_sbverify_missing=false   (disable auto EPEL retry when CRB install fails or sbverify absent)
 
 - name: Install sbsigntools package (explicit override)
   ansible.builtin.package:
@@ -9,17 +13,30 @@
     state: present
   when: sbsigntools_package_name | default('') | length > 0
 
-# Debian / Ubuntu — single package name used in practice (universe on Ubuntu if needed)
-- name: Debian/Ubuntu — apt install sbsigntool
+# Debian / Ubuntu — refresh cache best-effort, then install without requiring update_cache on the install task
+- name: Debian/Ubuntu — apt update (best effort)
   ansible.builtin.apt:
-    name: sbsigntool
-    state: present
     update_cache: true
+  failed_when: false
+  changed_when: false
   when:
     - sbsigntools_package_name | default('') | length == 0
     - ansible_facts['os_family'] == 'Debian'
 
-# RHEL / Alma / Rocky / Fedora — CRB/powertools then dnf install sbsigntools
+- name: Debian/Ubuntu — apt install sbsigntool
+  ansible.builtin.apt:
+    name: sbsigntool
+    state: present
+    update_cache: false
+  register: apt_sbsign
+  retries: 2
+  delay: 3
+  until: apt_sbsign is succeeded
+  when:
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'Debian'
+
+# RHEL / Alma / Rocky / Fedora
 - name: RedHat — enable CRB / powertools (helps locate sbsigntools)
   ansible.builtin.shell: |
     set +e
@@ -40,60 +57,86 @@
     - sbsigntools_package_name | default('') | length == 0
     - ansible_facts['os_family'] == 'RedHat'
 
-# Without EPEL: vendor repos (CRB above) + sbsigntools
-- name: RedHat — install sbsigntools from enabled repos
-  ansible.builtin.package:
-    name: sbsigntools
-    state: present
+- name: RedHat — dnf install sbsigntools (first attempt; CRB repos)
+  ansible.builtin.command:
+    argv:
+      - dnf
+      - install
+      - -y
+      - sbsigntools
+  register: rh_dnf_sbsigntools_try1
   failed_when: false
+  changed_when: rh_dnf_sbsigntools_try1.rc == 0
   when:
     - sbsigntools_package_name | default('') | length == 0
     - ansible_facts['os_family'] == 'RedHat'
     - not (secureboot_install_epel_for_sbsigntools | default(false) | bool)
 
-# With EPEL opt-in: one path = EPEL release RPM then same package name
-- name: RedHat — install EPEL release (opt-in)
+- name: RedHat — install EPEL release when explicitly requested
   ansible.builtin.command:
     argv:
       - bash
       - -lc
       - dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{{ ansible_distribution_major_version }}.noarch.rpm"
-  register: rh_epel
+  register: rh_epel_explicit
   failed_when: false
-  changed_when: rh_epel.rc == 0
+  changed_when: rh_epel_explicit.rc == 0
   when:
     - sbsigntools_package_name | default('') | length == 0
     - ansible_facts['os_family'] == 'RedHat'
     - ansible_distribution_major_version | int >= 8
     - secureboot_install_epel_for_sbsigntools | default(false) | bool
 
-- name: RedHat — install sbsigntools (with EPEL available)
-  ansible.builtin.package:
-    name: sbsigntools
-    state: present
+- name: RedHat — dnf install sbsigntools (after explicit EPEL)
+  ansible.builtin.command:
+    argv:
+      - dnf
+      - install
+      - -y
+      - sbsigntools
+  register: rh_dnf_after_explicit_epel
   failed_when: false
   when:
     - sbsigntools_package_name | default('') | length == 0
     - ansible_facts['os_family'] == 'RedHat'
     - secureboot_install_epel_for_sbsigntools | default(false) | bool
 
-# SUSE / openSUSE — single zypper install
-- name: SUSE — zypper install sbsigntools
-  ansible.builtin.command:
-    argv:
-      - zypper
-      - --non-interactive
-      - install
-      - -y
-      - sbsigntools
-  register: suse_sbsign
+- name: Stat /usr/bin/sbverify after RHEL install attempts
+  ansible.builtin.stat:
+    path: /usr/bin/sbverify
+  register: rh_sbverify_bin
+  when:
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'RedHat'
+    - not (secureboot_install_epel_for_sbsigntools | default(false) | bool)
+
+- name: RedHat — auto EPEL + retry when sbverify still missing (default on)
+  ansible.builtin.shell: |
+    set -e
+    dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{{ ansible_distribution_major_version }}.noarch.rpm"
+    dnf install -y sbsigntools
+  args:
+    executable: /bin/bash
+  register: rh_auto_epel_retry
   failed_when: false
-  changed_when: suse_sbsign.rc == 0
+  changed_when: rh_auto_epel_retry.rc == 0
+  when:
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'RedHat'
+    - ansible_distribution_major_version | int >= 8
+    - not (secureboot_install_epel_for_sbsigntools | default(false) | bool)
+    - secureboot_auto_epel_if_sbverify_missing | default(true) | bool
+    - not rh_sbverify_bin.stat.exists | default(true)
+
+- name: SUSE — install sbsigntools (package module)
+  ansible.builtin.package:
+    name: sbsigntools
+    state: present
   when:
     - sbsigntools_package_name | default('') | length == 0
     - ansible_facts['os_family'] == 'Suse'
 
-- name: Other Linux — generic package name sbsigntools
+- name: Other Linux — sbsigntools
   ansible.builtin.package:
     name: sbsigntools
     state: present
@@ -123,6 +166,64 @@
   failed_when: false
   when: which_sbverify.rc == 0
 
-- name: Report sbverify availability
+# When sbverify is still missing, install pesign (same PE/Authenticode ecosystem; used by assessment as fallback reader)
+- name: Debian/Ubuntu — apt install pesign (fallback)
+  ansible.builtin.apt:
+    name: pesign
+    state: present
+    update_cache: false
+  failed_when: false
+  when:
+    - which_sbverify.rc != 0
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'Debian'
+
+- name: RedHat — dnf install pesign (fallback)
+  ansible.builtin.command:
+    argv:
+      - dnf
+      - install
+      - -y
+      - pesign
+  failed_when: false
+  changed_when: false
+  when:
+    - which_sbverify.rc != 0
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'RedHat'
+
+- name: SUSE — install pesign (fallback)
+  ansible.builtin.package:
+    name: pesign
+    state: present
+  failed_when: false
+  when:
+    - which_sbverify.rc != 0
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'Suse'
+
+- name: Other Linux — pesign (fallback)
+  ansible.builtin.package:
+    name: pesign
+    state: present
+  failed_when: false
+  when:
+    - which_sbverify.rc != 0
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] not in ['Debian', 'RedHat', 'Suse']
+
+- name: Verify pesign is on PATH
+  ansible.builtin.command:
+    argv:
+      - bash
+      - -lc
+      - command -v pesign
+  register: which_pesign
+  changed_when: false
+  failed_when: false
+
+- name: Report sbverify / pesign availability
   ansible.builtin.debug:
-    msg: "{{ (['sbverify: ' ~ which_sbverify.stdout] + (sbverify_version.stdout_lines | default([]))) if which_sbverify.rc == 0 else ['sbverify not on PATH after package install; Linux bootloader PKCS#7 cannot be assessed without the distro sbsigntools/sbsigntool package.'] }}"
+    msg:
+      - "{{ 'sbverify: ' ~ which_sbverify.stdout if which_sbverify.rc == 0 else 'sbverify: not on PATH (sbsigntools/sbsigntool)' }}"
+      - "{{ 'pesign: ' ~ which_pesign.stdout if which_pesign.rc == 0 else ('pesign: not on PATH — install pesign package for Authenticode fallback' if which_sbverify.rc != 0 else 'pesign: optional (sbverify available)') }}"
