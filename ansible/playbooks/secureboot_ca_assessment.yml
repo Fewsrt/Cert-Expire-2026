@@ -8,8 +8,8 @@
 # RHEL — EPEL (optional, security review):
 #   -e secureboot_install_epel_for_sbsigntools=true
 
-# Per-host transport state on localhost: used when a guest never gets secureboot_assessment (unreachable, auth, etc.).
-- name: Preflight — ICMP, WinRM, SSH (records reason per host; does not stop the run)
+# Preflight is informational only; assessment tasks handle unreachable/auth failures directly.
+- name: Preflight — ICMP, WinRM, SSH
   hosts: localhost
   gather_facts: false
   vars:
@@ -31,11 +31,6 @@
       ignore_errors: true
       changed_when: false
 
-    - name: Record ICMP reachability per host
-      ansible.builtin.set_fact:
-        secureboot_transport: "{{ secureboot_transport | default({}) | combine({ item.item: { 'icmp_ok': (item.rc | default(1)) == 0, 'icmp_msg': ((item.stderr | default('')) + (item.stdout | default(''))) | truncate(1500) } }) }}"
-      loop: "{{ secureboot_icmp_reg.results | default([]) }}"
-
     - name: WinRM probe each Windows guest (requires pywinrm on controller)
       ansible.windows.win_ping:
       loop: "{{ _win_hosts }}"
@@ -45,11 +40,6 @@
       register: secureboot_winrm_reg
       ignore_unreachable: true
       ignore_errors: true
-
-    - name: Merge WinRM status into transport state
-      ansible.builtin.set_fact:
-        secureboot_transport: "{{ secureboot_transport | combine({ item.item: secureboot_transport[item.item] | default({}) | combine({ 'winrm_ok': (not (item.unreachable | default(false)) and not (item.failed | default(false))), 'winrm_msg': (item.msg | default('') | string) | truncate(2000) }) }) }}"
-      loop: "{{ secureboot_winrm_reg.results | default([]) }}"
 
     - name: SSH probe each Linux guest
       ansible.builtin.ping:
@@ -61,24 +51,15 @@
       ignore_unreachable: true
       ignore_errors: true
 
-    - name: Merge SSH status into transport state
-      ansible.builtin.set_fact:
-        secureboot_transport: "{{ secureboot_transport | combine({ item.item: secureboot_transport[item.item] | default({}) | combine({ 'ssh_ok': (not (item.unreachable | default(false)) and not (item.failed | default(false))), 'ssh_msg': (item.msg | default('') | string) | truncate(2000) }) }) }}"
-      loop: "{{ secureboot_ssh_reg.results | default([]) }}"
-
 - name: Optional — install sbsigntools on Linux (off by default; see group_vars all.yml)
   hosts: linux
   gather_facts: "{{ secureboot_install_sbsigntools | default(false) | bool }}"
   become: true
   ignore_unreachable: true
   become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
-  vars:
-    _tx: "{{ hostvars['localhost'].secureboot_transport | default({}) }}"
   tasks:
     - name: Install sbsigntools when secureboot_install_sbsigntools is true
-      when:
-        - secureboot_install_sbsigntools | default(false) | bool
-        - (_tx[inventory_hostname] | default({})).ssh_ok | default(false)
+      when: secureboot_install_sbsigntools | default(false) | bool
       block:
         - ansible.builtin.include_tasks: tasks/install_sbsigntools_linux_tasks.yml
       rescue:
@@ -104,11 +85,8 @@
   hosts: windows
   gather_facts: false
   ignore_unreachable: true
-  vars:
-    _tx: "{{ hostvars['localhost'].secureboot_transport | default({}) }}"
   tasks:
     - name: Guest Secure Boot assessment via WinRM
-      when: (_tx[inventory_hostname] | default({})).winrm_ok | default(false)
       block:
         - name: Collect Windows Secure Boot DB and bootloader CA evidence
           ansible.windows.win_shell:
@@ -302,13 +280,9 @@
   ignore_unreachable: true
   # SLES minimal images often lack sudo (use su + root password). Ubuntu/RHEL typically use sudo.
   become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
-  vars:
-    _tx: "{{ hostvars['localhost'].secureboot_transport | default({}) }}"
   tasks:
     - name: Guest Secure Boot assessment via SSH
-      when:
-        - (_tx[inventory_hostname] | default({})).ssh_ok | default(false)
-        - not (secureboot_pkg_failed | default(false))
+      when: not (secureboot_pkg_failed | default(false))
       block:
         - name: Collect Linux Secure Boot DB and bootloader CA evidence
           ansible.builtin.shell:
