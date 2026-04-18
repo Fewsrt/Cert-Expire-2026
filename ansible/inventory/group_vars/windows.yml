@@ -2,6 +2,14 @@
 # WinRM defaults for Windows group. Connection refused on :5986 usually means only HTTP :5985 is open.
 # Override if you use HTTPS listeners:
 #   ansible-playbook -e ansible_winrm_scheme=https -e ansible_port=5986
+#
+# "credentials were rejected" = WinRM works but auth failed. Check:
+#   - export ANSIBLE_PASSWORD (or: set -a && source playbooks/.env && set +a) before ansible-playbook
+#   - ansible_user from CSV must match the account (local built-in is often "Administrator" with capital A)
+#   - workgroup: try -e 'ansible_user=.\Administrator' or ansible_user=Administrator
+#   - domain: ansible_user=DOMAIN\\svcaccount
+# Test one host: ansible windows -m win_ping -l win2019esx8secure -vvv
 ansible_winrm_scheme: http
 ansible_port: 5985
 ansible_winrm_server_cert_validation: ignore
+ansible_winrm_transport: ntlm
