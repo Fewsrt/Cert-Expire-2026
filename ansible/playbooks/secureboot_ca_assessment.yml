@@ -8,7 +8,7 @@
 # RHEL — EPEL (optional, security review):
 #   -e secureboot_install_epel_for_sbsigntools=true
 
-# Per-host connectivity map on localhost: used when a guest never gets secureboot_assessment (unreachable, auth, etc.).
+# Per-host transport state on localhost: used when a guest never gets secureboot_assessment (unreachable, auth, etc.).
 - name: Preflight — ICMP, WinRM, SSH (records reason per host; does not stop the run)
   hosts: localhost
   gather_facts: false
@@ -31,9 +31,9 @@
       ignore_errors: true
       changed_when: false
 
-    - name: Build connectivity map — ICMP
+    - name: Record ICMP reachability per host
       ansible.builtin.set_fact:
-        secureboot_connectivity_map: "{{ secureboot_connectivity_map | default({}) | combine({ item.item: { 'icmp_ok': (item.rc | default(1)) == 0, 'icmp_msg': ((item.stderr | default('')) + (item.stdout | default(''))) | truncate(1500) } }) }}"
+        secureboot_transport: "{{ secureboot_transport | default({}) | combine({ item.item: { 'icmp_ok': (item.rc | default(1)) == 0, 'icmp_msg': ((item.stderr | default('')) + (item.stdout | default(''))) | truncate(1500) } }) }}"
       loop: "{{ secureboot_icmp_reg.results | default([]) }}"
 
     - name: WinRM probe each Windows guest (requires pywinrm on controller)
@@ -46,9 +46,9 @@
       ignore_unreachable: true
       ignore_errors: true
 
-    - name: Merge WinRM results into connectivity map
+    - name: Merge WinRM status into transport state
       ansible.builtin.set_fact:
-        secureboot_connectivity_map: "{{ secureboot_connectivity_map | combine({ item.item: secureboot_connectivity_map[item.item] | default({}) | combine({ 'winrm_ok': (not (item.unreachable | default(false)) and not (item.failed | default(false))), 'winrm_msg': (item.msg | default('') | string) | truncate(2000) }) }) }}"
+        secureboot_transport: "{{ secureboot_transport | combine({ item.item: secureboot_transport[item.item] | default({}) | combine({ 'winrm_ok': (not (item.unreachable | default(false)) and not (item.failed | default(false))), 'winrm_msg': (item.msg | default('') | string) | truncate(2000) }) }) }}"
       loop: "{{ secureboot_winrm_reg.results | default([]) }}"
 
     - name: SSH probe each Linux guest
@@ -61,9 +61,9 @@
       ignore_unreachable: true
       ignore_errors: true
 
-    - name: Merge SSH results into connectivity map
+    - name: Merge SSH status into transport state
       ansible.builtin.set_fact:
-        secureboot_connectivity_map: "{{ secureboot_connectivity_map | combine({ item.item: secureboot_connectivity_map[item.item] | default({}) | combine({ 'ssh_ok': (not (item.unreachable | default(false)) and not (item.failed | default(false))), 'ssh_msg': (item.msg | default('') | string) | truncate(2000) }) }) }}"
+        secureboot_transport: "{{ secureboot_transport | combine({ item.item: secureboot_transport[item.item] | default({}) | combine({ 'ssh_ok': (not (item.unreachable | default(false)) and not (item.failed | default(false))), 'ssh_msg': (item.msg | default('') | string) | truncate(2000) }) }) }}"
       loop: "{{ secureboot_ssh_reg.results | default([]) }}"
 
 - name: Optional — install sbsigntools on Linux (off by default; see group_vars all.yml)
@@ -73,12 +73,12 @@
   ignore_unreachable: true
   become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
   vars:
-    _cm: "{{ hostvars['localhost'].secureboot_connectivity_map | default({}) }}"
+    _tx: "{{ hostvars['localhost'].secureboot_transport | default({}) }}"
   tasks:
     - name: Install sbsigntools when secureboot_install_sbsigntools is true
       when:
         - secureboot_install_sbsigntools | default(false) | bool
-        - (_cm[inventory_hostname] | default({})).ssh_ok | default(false)
+        - (_tx[inventory_hostname] | default({})).ssh_ok | default(false)
       block:
         - ansible.builtin.include_tasks: tasks/install_sbsigntools_linux_tasks.yml
       rescue:
@@ -114,10 +114,10 @@
   gather_facts: false
   ignore_unreachable: true
   vars:
-    _cm: "{{ hostvars['localhost'].secureboot_connectivity_map | default({}) }}"
+    _tx: "{{ hostvars['localhost'].secureboot_transport | default({}) }}"
   tasks:
     - name: Guest Secure Boot assessment via WinRM
-      when: (_cm[inventory_hostname] | default({})).winrm_ok | default(false)
+      when: (_tx[inventory_hostname] | default({})).winrm_ok | default(false)
       block:
         - name: Collect Windows Secure Boot DB and bootloader CA evidence
           ansible.windows.win_shell:
@@ -396,11 +396,11 @@
   # SLES minimal images often lack sudo (use su + root password). Ubuntu/RHEL typically use sudo.
   become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
   vars:
-    _cm: "{{ hostvars['localhost'].secureboot_connectivity_map | default({}) }}"
+    _tx: "{{ hostvars['localhost'].secureboot_transport | default({}) }}"
   tasks:
     - name: Guest Secure Boot assessment via SSH
       when:
-        - (_cm[inventory_hostname] | default({})).ssh_ok | default(false)
+        - (_tx[inventory_hostname] | default({})).ssh_ok | default(false)
         - not (secureboot_pkg_failed | default(false))
       block:
         - name: Collect Linux Secure Boot DB and bootloader CA evidence
@@ -702,7 +702,7 @@
                   fix = "Enable UEFI Secure Boot if policy requires it, then rerun assessment."
                 elif not active_file:
                   decision = "ACTIVE_BOOTLOADER_UNRESOLVED"
-                  root_cause = "Could not map BootCurrent/BootOrder from efibootmgr -v to a host path under the ESP (see efibootmgr_raw in JSON); efibootmgr missing, empty, nonstandard firmware output, or no shim/grub on ESP for fallback."
+                  root_cause = "Could not resolve BootCurrent/BootOrder from efibootmgr -v to a host path under the ESP (see efibootmgr_raw in JSON); efibootmgr missing, empty, nonstandard firmware output, or no shim/grub on ESP for fallback."
                   fix = "Install efibootmgr, verify ESP is mounted, ensure vendor shim/grub packages and EFI entries exist; inspect efibootmgr_raw in the JSON report."
                 elif active_file and not os.path.exists(active_file):
                   decision = "IMPACTED"
@@ -776,7 +776,7 @@
                   if not secure_boot_enabled:
                     return "Secure Boot off or unknown: does not assess UEFI-enforced boot or CA migration under SB."
                   if not active_file:
-                    return "Cannot map policy to an active EFI file: migration impact and boot chain are not assessed."
+                    return "Cannot relate policy to an active EFI file: migration impact and boot chain are not assessed."
                   if active_file and not os.path.exists(active_file):
                     return "Boot entry references a missing file: likely boot break until repaired; CA labels are secondary."
                   if active_file and not owner:
@@ -883,13 +883,13 @@
           {% if hostvars[host].secureboot_assessment is defined %}
           {{ hostvars[host].secureboot_assessment | combine({'inventory_host': host}) | to_nice_json }}
           {% else %}
-          {% set row = (hostvars['localhost'].secureboot_connectivity_map | default({}))[host] | default({}) %}
+          {% set row = (hostvars['localhost'].secureboot_transport | default({}))[host] | default({}) %}
           {% if host in (groups['windows'] | default([])) and not (row.winrm_ok | default(false)) %}
           {{ {'inventory_host': host, 'os_family': 'windows', 'failure_category': 'connectivity', 'decision': 'CONNECTIVITY_FAILED', 'ca2023_alignment': 'CONNECTIVITY_FAILED', 'ca2023_summary': 'No in-guest assessment: WinRM did not succeed.', 'root_cause': 'WinRM/transport failed (unreachable, timeout, auth, listener): ' ~ (row.winrm_msg | default('no detail') | string), 'fix': 'Fix DNS/firewall/5985-5986, credential, WinRM service, TLS; confirm ansible_host and inventory.', 'operational_interpretation': 'ICMP from controller: ' ~ (row.icmp_msg | default('') | truncate(500) if not (row.icmp_ok | default(false)) else 'ok (many sites block ICMP while WinRM still works)'), 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': '', 'active_bootloader_source': '', 'bootloader_signature_status': ''} | to_nice_json }}
           {% elif host in (groups['linux'] | default([])) and not (row.ssh_ok | default(false)) %}
           {{ {'inventory_host': host, 'os_family': 'linux', 'failure_category': 'connectivity', 'decision': 'CONNECTIVITY_FAILED', 'ca2023_alignment': 'CONNECTIVITY_FAILED', 'ca2023_summary': 'No in-guest assessment: SSH did not succeed.', 'root_cause': 'SSH failed (unreachable, timeout, auth, or missing Python): ' ~ (row.ssh_msg | default('no detail') | string), 'fix': 'Fix DNS/firewall:22, ansible_user/key/password, sudo; confirm ansible_host.', 'operational_interpretation': 'ICMP from controller: ' ~ (row.icmp_msg | default('') | truncate(500) if not (row.icmp_ok | default(false)) else 'ok'), 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': '', 'active_bootloader_resolve_method': '', 'bootloader_signature_status': ''} | to_nice_json }}
           {% else %}
-          {{ {'inventory_host': host, 'os_family': ('windows' if host in (groups['windows'] | default([])) else 'linux'), 'failure_category': 'report_gap', 'decision': 'REPORT_GAP', 'ca2023_alignment': 'REPORT_GAP', 'ca2023_summary': 'No assessment fact and connectivity map did not explain the gap.', 'root_cause': 'Playbook did not record secureboot_assessment and transport appeared OK — check earlier task stderr with -vvv.', 'fix': 'Re-run this play; if it persists, file a bug with ansible log.', 'operational_interpretation': 'Unexpected gap; not a policy classification.', 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': ''} | to_nice_json }}
+          {{ {'inventory_host': host, 'os_family': ('windows' if host in (groups['windows'] | default([])) else 'linux'), 'failure_category': 'report_gap', 'decision': 'REPORT_GAP', 'ca2023_alignment': 'REPORT_GAP', 'ca2023_summary': 'No assessment fact and transport checks did not explain the gap.', 'root_cause': 'Playbook did not record secureboot_assessment and transport appeared OK — check earlier task stderr with -vvv.', 'fix': 'Re-run this play; if it persists, file a bug with ansible log.', 'operational_interpretation': 'Unexpected gap; not a policy classification.', 'secure_boot_enabled': '', 'db_has_2011': '', 'db_has_2023': '', 'kek_has_2023': '', 'dbx_readable': '', 'active_bootloader_file': '', 'active_bootloader_has_2011': '', 'active_bootloader_has_2023': '', 'active_bootloader_signature_method': ''} | to_nice_json }}
           {% endif %}
           {% endif %}
           {% if not loop.last %},{% endif %}
@@ -908,7 +908,7 @@
           {% set path_res = a.active_bootloader_resolve_method | default(a.active_bootloader_source | default('')) %}
           {{ host }},{{ a.os_family | default('') }},{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},"{{ (a.active_bootloader_signature_method | default('')) | replace('"', '""') }}","{{ path_res | replace('"', '""') }}","{{ (a.bootloader_signature_status | default('')) | replace('"', '""') }}","{{ (a.failure_category | default('')) | replace('"', '""') }}","{{ (a.ca2023_alignment | default('')) | replace('"', '""') }}","{{ (a.ca2023_summary | default('')) | replace('"', '""') }}",{{ a.decision | default('') }},"{{ (a.root_cause | default('')) | replace('"', '""') }}","{{ (a.fix | default('')) | replace('"', '""') }}","{{ (a.operational_interpretation | default('')) | replace('"', '""') }}"
           {% else %}
-          {% set row = (hostvars['localhost'].secureboot_connectivity_map | default({}))[host] | default({}) %}
+          {% set row = (hostvars['localhost'].secureboot_transport | default({}))[host] | default({}) %}
           {% if host in (groups['windows'] | default([])) and not (row.winrm_ok | default(false)) %}
           {% set icmp_txt = (row.icmp_msg | default('') | truncate(400)) if not (row.icmp_ok | default(false)) else 'ok (ICMP may be blocked while WinRM works)' %}
           {{ host }},windows,,,,,,"",,,,"","","connectivity","CONNECTIVITY_FAILED","No in-guest assessment: WinRM did not succeed.",CONNECTIVITY_FAILED,"{{ ('WinRM/transport failed: ' ~ (row.winrm_msg | default(''))) | replace('"', '""') }}","Fix DNS/firewall/WinRM listener and credentials; confirm ansible_host.","{{ ('ICMP from controller: ' ~ icmp_txt) | replace('"', '""') }}"

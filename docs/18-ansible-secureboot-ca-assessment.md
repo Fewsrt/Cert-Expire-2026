@@ -163,7 +163,7 @@ The certificate chain is read with `Get-AuthenticodeSignature` and `X509Chain`. 
 
 ### Linux
 
-The playbook reads `efibootmgr -v`, finds `BootCurrent`, maps the EFI path to `/boot/efi/...`, and inspects that active file.
+The playbook reads `efibootmgr -v`, finds `BootCurrent`, resolves the EFI path to `/boot/efi/...`, and inspects that active file.
 
 Example:
 
@@ -180,7 +180,7 @@ Active file:
 
 `active_bootloader_has_2011` / `active_bootloader_has_2023` come from **`sbverify --list`** when it succeeds; if `sbverify` is absent or non-zero, the playbook uses **`pesign -i … -S`** (same CA regex on tool output). Both are **distro packages** — no raw-binary heuristic. If both are missing or fail, the row is typically `NEEDS_EVIDENCE`. **`operational_interpretation`** limits claims about **next-reboot boot success**.
 
-## Remediation Mapping
+## Remediation
 
 | Finding | Fix |
 |---|---|
