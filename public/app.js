@@ -1089,7 +1089,7 @@ Start-ScheduledTask -TaskName "\\Microsoft\\Windows\\PI\\Secure-Boot-Update"`
 
   const windowsBootloader = {
     label: "Windows bootloader signing CA check",
-    description: "ตรวจไฟล์ boot manager ว่า signed ด้วย certificate chain ไหน ใช้ยืนยันว่า bootloader ย้ายไปใช้ Windows UEFI CA 2023 แล้วหรือยัง",
+    description: "ตรวจไฟล์ boot manager ว่า signed ด้วย certificate chain 2011 หรือ 2023 ถ้า SignerCertificate ไม่ออก ให้ใช้ signtool fallback",
     code: `$bootFiles = @(
   "$env:SystemRoot\\Boot\\EFI\\bootmgfw.efi",
   "$env:SystemDrive\\EFI\\Microsoft\\Boot\\bootmgfw.efi"
@@ -1099,8 +1099,26 @@ $bootFiles | ForEach-Object {
   if (Test-Path $_) {
     Write-Host "\\n===== $_ ====="
     $sig = Get-AuthenticodeSignature $_
-    $sig | Select-Object Status, Path
-    $sig.SignerCertificate | Select-Object Subject, Issuer, NotBefore, NotAfter, Thumbprint
+    $cert = $sig.SignerCertificate
+    $text = (($cert.Subject, $cert.Issuer) -join " ")
+
+    [PSCustomObject]@{
+      Path = $_
+      Status = $sig.Status
+      Subject = $cert.Subject
+      Issuer = $cert.Issuer
+      NotBefore = $cert.NotBefore
+      NotAfter = $cert.NotAfter
+      Thumbprint = $cert.Thumbprint
+      Is2011 = $text -match "2011|Windows Production PCA"
+      Is2023 = $text -match "2023|Windows UEFI CA"
+      NeedSigntoolFallback = -not $cert
+    } | Format-List
+
+    if (-not $cert) {
+      Write-Host "SignerCertificate is empty. If signtool is installed, run:"
+      Write-Host "signtool verify /pa /v \`"$_\`""
+    }
   }
 }`
   };
