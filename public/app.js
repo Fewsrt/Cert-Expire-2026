@@ -1188,6 +1188,56 @@ $bootFiles | ForEach-Object {
 }`
   };
 
+  const windowsBootloaderChain = {
+    label: "Windows bootloader full certificate chain check",
+    description: "แตก certificate chain ของ bootmgfw.efi ทุกชั้น เพื่อดูว่า leaf/intermediate/root มี 2011 หรือ 2023 ตรงไหนบ้าง",
+    code: `$bootFiles = @(
+  "$env:SystemRoot\\Boot\\EFI\\bootmgfw.efi",
+  "$env:SystemDrive\\EFI\\Microsoft\\Boot\\bootmgfw.efi"
+)
+
+$bootFiles | ForEach-Object {
+  if (Test-Path $_) {
+    Write-Host "\\n===== Authenticode Signature: $_ ====="
+    $sig = Get-AuthenticodeSignature $_
+    $sig | Format-List Status, StatusMessage, Path
+
+    $cert = $sig.SignerCertificate
+    if (-not $cert) {
+      Write-Host "SignerCertificate is empty. Cannot build chain with Get-AuthenticodeSignature."
+      Write-Host "Fallback: signtool verify /pa /v \`"$_\`""
+      return
+    }
+
+    Write-Host "\\n===== Signer Certificate ====="
+    $cert | Format-List Subject, Issuer, NotBefore, NotAfter, Thumbprint
+
+    Write-Host "\\n===== Certificate Chain ====="
+    $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+    $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+    $chain.Build($cert) | Out-Null
+
+    $index = 0
+    $chain.ChainElements | ForEach-Object {
+      $text = ($_.Certificate.Subject + " " + $_.Certificate.Issuer)
+      [PSCustomObject]@{
+        Index = $index
+        Subject = $_.Certificate.Subject
+        Issuer = $_.Certificate.Issuer
+        NotBefore = $_.Certificate.NotBefore
+        NotAfter = $_.Certificate.NotAfter
+        Thumbprint = $_.Certificate.Thumbprint
+        Status = ($_.ChainElementStatus | ForEach-Object { $_.Status }) -join ","
+        StatusInformation = ($_.ChainElementStatus | ForEach-Object { $_.StatusInformation.Trim() }) -join "; "
+        Is2011 = $text -match "2011|Windows Production PCA"
+        Is2023 = $text -match "2023|Windows UEFI CA"
+      } | Format-List
+      $index += 1
+    }
+  }
+}`
+  };
+
   const bitLocker = {
     label: "BitLocker check / suspend",
     description: "ใช้กับ VM ที่มี vTPM/BitLocker เพื่อลดโอกาสถาม recovery key หลัง Secure Boot variable เปลี่ยน",
@@ -1242,10 +1292,10 @@ mv vmname.nvram vmname.nvram_old
   if (testCase.os.includes("Ubuntu")) return [linuxUbuntu];
   if (testCase.os.includes("RHEL") || testCase.os.includes("Rocky") || testCase.os.includes("Oracle")) return [linuxRhel];
   if (testCase.id === "1.2") return [{ label: "Windows Secure Boot state", code: "Confirm-SecureBootUEFI" }];
-  if (testCase.id === "1.3") return [windowsPatchCheck, windowsCheck, windowsBootloader, windowsEventCheck, windowsEventGuide, pkCheck, windowsOnlineUpdate, windowsOfflineUpdate];
-  if (testCase.id === "2.2") return [windowsPatchCheck, windowsCheck, windowsBootloader, windowsEventCheck, windowsEventGuide, windowsTrigger, esxiNvram, windowsOnlineUpdate, windowsOfflineUpdate];
-  if (testCase.id === "4.2") return [bitLocker, windowsPatchCheck, windowsCheck, windowsBootloader, windowsEventCheck, windowsTrigger, windowsOnlineUpdate, windowsOfflineUpdate];
-  return [windowsPatchCheck, windowsCheck, windowsBootloader, windowsEventCheck, windowsEventGuide, windowsTrigger, windowsOnlineUpdate, windowsOfflineUpdate];
+  if (testCase.id === "1.3") return [windowsPatchCheck, windowsCheck, windowsBootloader, windowsBootloaderChain, windowsEventCheck, windowsEventGuide, pkCheck, windowsOnlineUpdate, windowsOfflineUpdate];
+  if (testCase.id === "2.2") return [windowsPatchCheck, windowsCheck, windowsBootloader, windowsBootloaderChain, windowsEventCheck, windowsEventGuide, windowsTrigger, esxiNvram, windowsOnlineUpdate, windowsOfflineUpdate];
+  if (testCase.id === "4.2") return [bitLocker, windowsPatchCheck, windowsCheck, windowsBootloader, windowsBootloaderChain, windowsEventCheck, windowsTrigger, windowsOnlineUpdate, windowsOfflineUpdate];
+  return [windowsPatchCheck, windowsCheck, windowsBootloader, windowsBootloaderChain, windowsEventCheck, windowsEventGuide, windowsTrigger, windowsOnlineUpdate, windowsOfflineUpdate];
 }
 
 function loadLocalResults() {
