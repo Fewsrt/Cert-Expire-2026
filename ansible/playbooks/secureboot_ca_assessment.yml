@@ -255,13 +255,32 @@
           import os
           import re
           import subprocess
+          import sys
 
           def run(cmd):
-            proc = subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            return proc.stdout.strip()
+            kw = {"shell": True, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
+            if sys.version_info >= (3, 7):
+              kw["text"] = True
+            else:
+              kw["universal_newlines"] = True
+            proc = subprocess.run(cmd, **kw)
+            out = proc.stdout
+            return (out or "").strip()
 
           def has(pattern, text):
             return bool(re.search(pattern, text or "", re.I))
+
+          def _mokutil_summary_line(line):
+            s = line.strip()
+            return (
+                s.startswith("[key")
+                or s.startswith("Owner:")
+                or s.startswith("SHA1 Fingerprint:")
+                or s.startswith("Issuer:")
+                or s.startswith("Subject:")
+                or s.startswith("Not Before")
+                or s.startswith("Not After")
+            )
 
           def sb_var(name):
             text = run(f"mokutil --{name} 2>&1")
@@ -274,7 +293,7 @@
                 "has_windows_uefi_ca_2023": has(r"Windows UEFI CA 2023", text),
                 "has_ms_uefi_ca_2023": has(r"Microsoft UEFI CA 2023", text),
                 "has_option_rom_2023": has(r"Microsoft Option ROM UEFI CA 2023", text),
-                "summary": "\\n".join(line for line in text.splitlines() if re.search(r"^\\[key|Owner:|SHA1 Fingerprint:|Issuer:|Subject:|Not Before:|Not After :", line))[:12000],
+                "summary": "\\n".join(line for line in text.splitlines() if _mokutil_summary_line(line))[:12000],
             }
 
           def active_efi_from_efibootmgr(text):

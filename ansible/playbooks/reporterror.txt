@@ -1,0 +1,13 @@
+Secure Boot CA assessment — error notes (playbook: secureboot_ca_assessment.yml)
+
+Linux embedded script (Collect Linux Secure Boot…)
+- Python 3.6: subprocess.run() has no keyword "text=". Fixed in playbook by using
+  universal_newlines=True when Python < 3.7.
+- mokutil summary filter: old regex used "^\\[key|..." which broke the character
+  class and raised re.error. Fixed by filtering lines with startswith() prefixes
+  ([key, Owner:, SHA1 Fingerprint:, Issuer:, Subject:, Not Before, Not After).
+
+Not playbook bugs (fix on target / inventory)
+- SSH connection refused: sshd, firewall, or host down.
+- SSH authentication failed: wrong password or key for that user/host.
+- WinRM: port 5985/5986, HTTPS listener, credentials, pywinrm on controller.
