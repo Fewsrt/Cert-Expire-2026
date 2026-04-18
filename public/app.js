@@ -388,6 +388,7 @@ function fillCommands(container, commands) {
     box.className = "command-box";
     box.innerHTML = `
       <strong>${escapeHtml(item.label)}</strong>
+      ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}
       <pre><code>${escapeHtml(item.code)}</code></pre>
     `;
     container.appendChild(box);
@@ -407,10 +408,14 @@ function parseCommands(value) {
     .map((block) => block.trim())
     .filter(Boolean)
     .map((block) => {
-      const [label, ...codeLines] = block.split("\n");
+      const [label, ...lines] = block.split("\n");
+      const description = lines[0]?.startsWith("คำอธิบาย:")
+        ? lines.shift().replace("คำอธิบาย:", "").trim()
+        : "";
       return {
         label: (label || "Command").trim(),
-        code: codeLines.join("\n").trim()
+        description,
+        code: lines.join("\n").trim()
       };
     })
     .filter((item) => item.code);
@@ -418,7 +423,11 @@ function parseCommands(value) {
 
 function serializeCommands(commands) {
   return (commands || [])
-    .map((item) => `${item.label || "Command"}\n${item.code || ""}`.trim())
+    .map((item) => [
+      item.label || "Command",
+      item.description ? `คำอธิบาย: ${item.description}` : "",
+      item.code || ""
+    ].filter(Boolean).join("\n").trim())
     .join("\n---\n");
 }
 
@@ -1025,27 +1034,62 @@ function defaultResult() {
 
 function getCommands(testCase) {
   const windowsCheck = {
-    label: "Windows check CA / KEK / events",
+    label: "Windows check CA / KEK / db / dbx / events",
+    description: "ตรวจ Secure Boot state, หา CA 2023 ใน db, หา KEK 2023 ใน KEK, อ่าน db/dbx เพื่อเก็บหลักฐาน และดู event ว่า update สำเร็จหรือ fail จุดไหน",
     code: `Confirm-SecureBootUEFI
 
-[System.Text.Encoding]::ASCII.GetString((Get-SecureBootUEFI db).Bytes) -match 'Windows UEFI CA 2023'
-[System.Text.Encoding]::ASCII.GetString((Get-SecureBootUEFI KEK).Bytes) -match 'Microsoft Corporation KEK 2K CA 2023'
+$vars = "PK","KEK","db","dbx"
+foreach ($name in $vars) {
+  $var = Get-SecureBootUEFI -Name $name -ErrorAction SilentlyContinue
+  if ($var) {
+    $text = [System.Text.Encoding]::ASCII.GetString($var.Bytes)
+    [PSCustomObject]@{
+      Name = $name
+      Has_Windows_UEFI_CA_2023 = $text -match "Windows UEFI CA 2023"
+      Has_MS_KEK_2K_CA_2023 = $text -match "Microsoft Corporation KEK 2K CA 2023"
+      Has_MS_UEFI_CA_2023 = $text -match "Microsoft UEFI CA 2023"
+      Has_MS_Option_ROM_UEFI_CA_2023 = $text -match "Microsoft Option ROM UEFI CA 2023"
+      Bytes = $var.Bytes.Length
+    }
+  }
+}
 
 Get-ItemProperty -Path HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot -Name AvailableUpdates -ErrorAction SilentlyContinue
 Get-ItemProperty -Path HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\Servicing -ErrorAction SilentlyContinue
 
-Get-WinEvent -FilterHashtable @{LogName='System'; Id=1795,1796,1801,1808} -MaxEvents 20 |
+Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='TPM-WMI'; Id=1032,1036,1043,1044,1045,1795,1796,1797,1798,1799,1800,1801,1802,1803,1808} -MaxEvents 50 |
   Select-Object TimeCreated, Id, ProviderName, Message`
+  };
+
+  const windowsEventGuide = {
+    label: "Windows event meaning guide",
+    description: "ใช้อ่านความหมาย event ตอนสรุปผล test และระบุ root cause/remediation ในเว็บ",
+    code: `# 1036 = Windows UEFI CA 2023 ถูกเพิ่มเข้า db สำเร็จ
+# 1043 = Microsoft Corporation KEK 2K CA 2023 ถูกเพิ่มเข้า KEK สำเร็จ
+# 1044 = Microsoft Option ROM UEFI CA 2023 ถูกเพิ่มเข้า db สำเร็จ
+# 1045 = Microsoft UEFI CA 2023 ถูกเพิ่มเข้า db สำเร็จ
+# 1795 = firmware/platform คืน error ตอน update DB, DBX หรือ KEK; ใน VM ให้สงสัย hypervisor/firmware/NVRAM
+# 1796 = unexpected error ระหว่าง Secure Boot update; ดู message เพื่อรู้ว่าเป็น DB, DBX, KEK หรือ policy
+# 1797 = DBX update ถูก block เพราะ Windows UEFI CA 2023 ยังไม่อยู่ใน db
+# 1798 = DBX update ถูก block เพราะ boot manager ยังไม่ได้ signed ด้วย Windows UEFI CA 2023
+# 1799 = boot manager signed ด้วย Windows UEFI CA 2023 ถูกติดตั้งสำเร็จ
+# 1800 = ต้อง reboot ก่อน Secure Boot update รอบถัดไป
+# 1801 = certificate/key update ยัง apply เข้า firmware ไม่สำเร็จหรือยัง pending
+# 1802 = update ถูก block จาก known firmware/platform issue
+# 1803 = หา OEM PK-signed KEK payload ไม่เจอ จึง update KEK ไม่ได้
+# 1808 = เครื่องมี Secure Boot CA/key ใหม่ครบตามเงื่อนไขที่ Windows ต้องการแล้ว`
   };
 
   const windowsTrigger = {
     label: "Windows trigger Secure Boot update",
+    description: "สั่ง opt-in ให้ Windows ทำ Secure Boot certificate update แล้วรัน scheduled task จากนั้นต้อง reboot และตรวจ CA/KEK/db/dbx ซ้ำ",
     code: `reg add HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot /v MicrosoftUpdateManagedOptIn /t REG_DWORD /d 1 /f
 Start-ScheduledTask -TaskName "\\Microsoft\\Windows\\PI\\Secure-Boot-Update"`
   };
 
   const bitLocker = {
     label: "BitLocker check / suspend",
+    description: "ใช้กับ VM ที่มี vTPM/BitLocker เพื่อลดโอกาสถาม recovery key หลัง Secure Boot variable เปลี่ยน",
     code: `manage-bde -status
 manage-bde -protectors -get C:
 Suspend-BitLocker -MountPoint C: -RebootCount 2`
@@ -1053,6 +1097,7 @@ Suspend-BitLocker -MountPoint C: -RebootCount 2`
 
   const pkCheck = {
     label: "Windows PK check",
+    description: "ตรวจ Platform Key เพิ่มเติมเมื่อสงสัย PK invalid หรือ firmware variable ผิดปกติ",
     code: `$pk = Get-SecureBootUEFI -Name PK
 $bytes = $pk.Bytes
 $cert = $bytes[44..($bytes.Length-1)]
@@ -1062,6 +1107,7 @@ certutil -dump PK.der`
 
   const linuxRhel = {
     label: "RHEL-family Secure Boot check",
+    description: "ตรวจ Secure Boot state และอ่าน PK/KEK/db/dbx ด้วย mokutil พร้อมเช็ค shim, GRUB และ kernel จาก repo ที่ support",
     code: `mokutil --sb-state
 mokutil --pk
 mokutil --kek
@@ -1072,6 +1118,7 @@ rpm -q shim grub2-efi-x64 grub2-tools kernel`
 
   const linuxUbuntu = {
     label: "Ubuntu Secure Boot check",
+    description: "ตรวจ Secure Boot state และอ่าน PK/KEK/db/dbx ด้วย mokutil พร้อมเช็ค shim-signed, signed GRUB และ kernel",
     code: `mokutil --sb-state
 mokutil --pk
 mokutil --kek
@@ -1082,6 +1129,7 @@ dpkg -l shim-signed shim grub-efi-amd64-signed grub2-common linux-image-generic`
 
   const esxiNvram = {
     label: "ESXi NVRAM remediation reference",
+    description: "ใช้เมื่อ CA/KEK/db/dbx หายหลัง reboot หรือสงสัย .nvram persistence บน VM ที่สร้างจาก ESXi รุ่นเก่า",
     code: `# Power off VM first
 # Datastore browser or ESXi shell:
 mv vmname.nvram vmname.nvram_old
@@ -1093,10 +1141,10 @@ mv vmname.nvram vmname.nvram_old
   if (testCase.os.includes("Ubuntu")) return [linuxUbuntu];
   if (testCase.os.includes("RHEL") || testCase.os.includes("Rocky") || testCase.os.includes("Oracle")) return [linuxRhel];
   if (testCase.id === "1.2") return [{ label: "Windows Secure Boot state", code: "Confirm-SecureBootUEFI" }];
-  if (testCase.id === "1.3") return [windowsCheck, pkCheck];
-  if (testCase.id === "2.2") return [windowsCheck, windowsTrigger, esxiNvram];
+  if (testCase.id === "1.3") return [windowsCheck, windowsEventGuide, pkCheck];
+  if (testCase.id === "2.2") return [windowsCheck, windowsEventGuide, windowsTrigger, esxiNvram];
   if (testCase.id === "4.2") return [bitLocker, windowsCheck, windowsTrigger];
-  return [windowsCheck, windowsTrigger];
+  return [windowsCheck, windowsEventGuide, windowsTrigger];
 }
 
 function loadLocalResults() {

@@ -423,6 +423,12 @@ h1 {
   margin-bottom: 6px;
 }
 
+.command-box p {
+  margin: 0 0 8px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .command-box pre {
   margin: 0;
   overflow-x: auto;
