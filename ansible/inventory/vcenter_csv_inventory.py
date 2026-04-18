@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """CSV-driven Ansible inventory for Secure Boot CA assessment.
 
-On Windows, `inventory/vcenter_csv_inventory.ps1` runs this file (Python 3 on PATH).
+On Linux/macOS, `inventory/vcenter_csv_inventory.sh` runs this file (Python 3 on PATH).
 
 The CSV should come from vCenter/PowerCLI inventory export and include a column
-that marks which machines to check. Only rows with check=true are emitted.
+that marks which machines to check. Only rows with check=true are emitted, unless
+VCENTER_INCLUDE_ALL is set (useful for full PowerCLI exports without a check column).
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ def detect_os_family(row: dict[str, str]) -> str:
         [
             explicit,
             first_value(row, ["guest_os", "guestos", "os", "os_name", "GuestFullName", "Guest OS"]),
-            first_value(row, ["name", "vm_name", "VM", "hostname"]),
+            first_value(row, ["name", "vm_name", "vmname", "VM", "hostname"]),
         ]
     ).lower()
     if "windows" in text or explicit.lower() == "windows":
@@ -54,8 +55,17 @@ def detect_os_family(row: dict[str, str]) -> str:
 
 
 def row_to_host(row: dict[str, str]) -> tuple[str, dict[str, object]]:
-    name = first_value(row, ["ansible_host_name", "hostname", "fqdn", "dns_name", "DNSName", "name", "vm_name", "VM"])
-    ansible_host = first_value(row, ["ansible_host", "ip", "ip_address", "IPAddress", "dns_name", "DNSName", "hostname", "fqdn"])
+    # PowerCLI/govc CSV samples use VMName, IP, Hostname, SecureBoot (see docs/02-inventory-powercli.md).
+    name = first_value(
+        row,
+        ["ansible_host_name", "hostname", "fqdn", "dns_name", "DNSName", "name", "vm_name", "vmname", "VM"],
+    )
+    ansible_host = first_value(
+        row,
+        ["ansible_host", "ip", "ip_address", "IPAddress", "dns_name", "DNSName", "hostname", "fqdn"],
+    )
+    if ansible_host and "," in ansible_host:
+        ansible_host = ansible_host.split(",")[0].strip()
     if not name and ansible_host:
         name = ansible_host
     if not name:
@@ -65,13 +75,13 @@ def row_to_host(row: dict[str, str]) -> tuple[str, dict[str, object]]:
     vars_: dict[str, object] = {
         "ansible_host": ansible_host or name,
         "target_os_family": os_family,
-        "vcenter_vm_name": first_value(row, ["vm_name", "VM", "name"]),
+        "vcenter_vm_name": first_value(row, ["vm_name", "vmname", "VM", "name"]),
         "vcenter_guest_os": first_value(row, ["guest_os", "guestos", "os", "os_name", "GuestFullName", "Guest OS"]),
         "vcenter_power_state": first_value(row, ["power_state", "PowerState"]),
-        "vcenter_secure_boot": first_value(row, ["secure_boot", "SecureBoot", "Secure Boot"]),
+        "vcenter_secure_boot": first_value(row, ["secure_boot", "secureboot", "SecureBoot", "Secure Boot"]),
         "vcenter_firmware": first_value(row, ["firmware", "Firmware"]),
         "vcenter_cluster": first_value(row, ["cluster", "Cluster"]),
-        "vcenter_host": first_value(row, ["esxi_host", "VMHost", "Host"]),
+        "vcenter_host": first_value(row, ["esxi_host", "vmhost", "VMHost", "Host", "esxi"]),
     }
 
     ansible_user = first_value(row, ["ansible_user", "user", "username"])
@@ -94,7 +104,7 @@ def row_to_host(row: dict[str, str]) -> tuple[str, dict[str, object]]:
     return name, vars_
 
 
-def build_inventory(csv_path: Path, check_column: str) -> dict[str, object]:
+def build_inventory(csv_path: Path, check_column: str, include_all: bool) -> dict[str, object]:
     inventory: dict[str, object] = {
         "all": {"children": ["windows", "linux"]},
         "windows": {"hosts": []},
@@ -109,7 +119,7 @@ def build_inventory(csv_path: Path, check_column: str) -> dict[str, object]:
 
         for row in reader:
             check_value = first_value(row, [check_column, "check", "Check", "assess", "Assess", "secureboot_check"])
-            if not truthy(check_value):
+            if not include_all and not truthy(check_value):
                 continue
             host, vars_ = row_to_host(row)
             group = "windows" if vars_["target_os_family"] == "windows" else "linux"
@@ -142,7 +152,8 @@ def main() -> int:
         print(json.dumps({"_meta": {"hostvars": {}}, "all": {"children": []}}))
         return 0
 
-    inventory = build_inventory(csv_path, args.check_column)
+    include_all = truthy(os.environ.get("VCENTER_INCLUDE_ALL", ""))
+    inventory = build_inventory(csv_path, args.check_column, include_all)
     if args.host:
         print(json.dumps(inventory.get("_meta", {}).get("hostvars", {}).get(args.host, {}), indent=2))
         return 0
