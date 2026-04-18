@@ -251,6 +251,7 @@
           active_bootloader_source = $(if ($bootloaderSummary.path -match "^[A-Z]:\\EFI\\Microsoft\\Boot") { "ESP" } else { "OS_FALLBACK" })
           active_bootloader_has_2011 = [bool]$bootloaderSummary.has_2011
           active_bootloader_has_2023 = [bool]$bootloaderSummary.has_2023
+          active_bootloader_signature_method = "windows_authenticode"
           ca2023_alignment = $ca2023Alignment
           ca2023_summary = $ca2023Summary
           bootloader_signature_status = [string]$bootloaderSummary.signature_status
@@ -491,17 +492,47 @@
             return ""
 
           def signature(path):
+            """Classify bootloader CA using sbverify when present, plus strings/binary scan (readable file)."""
+            pat_2011 = r"2011|Windows Production PCA|Microsoft Corporation UEFI CA 2011|Microsoft Corporation KEK CA 2011"
+            pat_2023 = r"2023|Windows UEFI CA 2023|Microsoft UEFI CA 2023|Microsoft Corporation KEK 2K CA 2023|Option ROM UEFI CA 2023"
             if not path or not os.path.exists(path):
-                return {"path": path, "exists": False, "has_2011": False, "has_2023": False, "text": ""}
-            if not run("command -v sbverify"):
-                return {"path": path, "exists": True, "has_2011": False, "has_2023": False, "text": "sbverify not installed"}
-            text = run(f"sbverify --list {json.dumps(path)} 2>&1")
+                return {"path": path, "exists": False, "has_2011": False, "has_2023": False, "text": "", "method": "none"}
+            st_out = run(f"strings -a -n 6 {json.dumps(path)} 2>/dev/null | head -c 400000")
+            blob = ""
+            try:
+                with open(path, "rb") as bf:
+                    raw = bf.read(16 * 1024 * 1024)
+                blob = (st_out or "") + chr(10) + raw.decode("latin-1", errors="ignore") + chr(10) + raw.decode("utf-16-le", errors="ignore")
+            except OSError as oe:
+                return {"path": path, "exists": True, "has_2011": False, "has_2023": False, "text": str(oe), "method": "unreadable"}
+            h1_h = has(pat_2011, blob)
+            h3_h = has(pat_2023, blob)
+            sb_out = ""
+            if run("command -v sbverify"):
+                sb_out = run(f"sbverify --list {json.dumps(path)} 2>&1")
+            h1_s = has(pat_2011, sb_out) if sb_out else False
+            h3_s = has(pat_2023, sb_out) if sb_out else False
+            h1 = bool(h1_s or h1_h)
+            h3 = bool(h3_s or h3_h)
+            if sb_out:
+                if (h1_h or h3_h) and (h1_s != h1 or h3_s != h3):
+                    method = "sbverify_and_strings_scan"
+                else:
+                    method = "sbverify"
+            else:
+                method = "strings_binary_scan"
+            parts = []
+            if sb_out:
+                parts.append("=== sbverify --list ===" + chr(10) + sb_out[:8000])
+            parts.append("=== strings/binary scan (CA name patterns) ===" + chr(10) + blob[:4000])
+            text = (chr(10).join(parts))[:12000]
             return {
                 "path": path,
                 "exists": True,
-                "has_2011": has(r"2011|Windows Production PCA|Microsoft Corporation UEFI CA 2011", text),
-                "has_2023": has(r"2023|Windows UEFI CA 2023|Microsoft UEFI CA 2023", text),
-                "text": text[:12000],
+                "has_2011": h1,
+                "has_2023": h3,
+                "text": text,
+                "method": method,
             }
 
           esp = efi_esp_mount()
@@ -552,10 +583,10 @@
             decision = "IMPACTED"
             root_cause = "Active EFI bootloader is not owned by an OS package"
             fix = "Reinstall/update vendor shim/GRUB packages and recreate EFI boot entry."
-          elif active_sig["text"] == "sbverify not installed":
+          elif active_file and owner and (not active_sig["has_2011"]) and (not active_sig["has_2023"]):
             decision = "NEEDS_EVIDENCE"
-            root_cause = "sbverify is not installed; bootloader CA chain not inspected"
-            fix = "Install sbsigntools, rerun assessment, then decide."
+            root_cause = "Bootloader file is readable but neither sbverify nor embedded-string scan matched known Microsoft CA 2011/2023 markers"
+            fix = "Install sbsigntools for authoritative sbverify PKCS7 output, or verify vendor shim signing manually."
           elif active_sig["has_2011"] and not active_sig["has_2023"]:
             decision = "IMPACTED_OR_VENDOR_CHAIN_REVIEW"
             root_cause = "Active EFI bootloader signature shows 2011 CA only"
@@ -580,18 +611,18 @@
           elif active_file and not owner:
             ca2023_alignment = "BOOTLOADER_NOT_FROM_OS_PACKAGE"
             ca2023_summary = "KEK+db may show CA 2023 but the active EFI file is not owned by an OS package; remediate before trusting bootloader chain evidence."
-          elif active_sig["text"] == "sbverify not installed":
-            ca2023_alignment = "EVIDENCE_NEEDS_SBVERIFY"
-            ca2023_summary = "Install sbsigntools (sbverify) to classify whether the active shim/GRUB chain shows 2011-only or 2023; firmware may already have CA 2023."
+          elif not bl2023 and not bl2011 and db_has_2023 and kek["has_kek_2023"]:
+            ca2023_alignment = "EVIDENCE_BOOTLOADER_CA_UNCLEAR"
+            ca2023_summary = "Firmware KEK/db show CA 2023 but sbverify/strings scan did not match CA 2011/2023 markers in the bootloader binary; install sbsigntools for full PKCS7 detail if needed."
           elif bl2023:
             ca2023_alignment = "ALIGNED_FW_AND_BOOTLOADER_SHOW_2023"
-            ca2023_summary = "KEK+db include CA 2023 and sbverify on the active bootloader references 2023 (aligned)."
+            ca2023_summary = "KEK+db include CA 2023 and the active bootloader matches 2023 markers (sbverify and/or strings/binary scan)."
           elif bl2011 and not bl2023:
             ca2023_alignment = "STANDBY_FW_HAS_2023_BOOTLOADER_CHAIN_2011_ONLY"
             ca2023_summary = "mokutil shows Microsoft CA 2023 in KEK+db but the active EFI binary chain still shows 2011 anchors only; typical mid-transition—update shim/GRUB and reboot; not the same as missing firmware CA 2023."
           else:
             ca2023_alignment = "BOOTLOADER_CHAIN_UNCLEAR"
-            ca2023_summary = "Firmware variables include CA 2023 but bootloader signature classification is unclear; review sbverify output manually."
+            ca2023_summary = "Firmware variables include CA 2023 but bootloader chain classification is unclear; review sbverify/strings output in active_bootloader_signature_text."
 
           print(json.dumps({
             "host": os.uname().nodename,
@@ -609,6 +640,7 @@
             "active_bootloader_owner": owner,
             "active_bootloader_has_2011": bool(active_sig["has_2011"]),
             "active_bootloader_has_2023": bool(active_sig["has_2023"]),
+            "active_bootloader_signature_method": active_sig.get("method", ""),
             "ca2023_alignment": ca2023_alignment,
             "ca2023_summary": ca2023_summary,
             "active_bootloader_signature_text": active_sig["text"],
@@ -662,11 +694,11 @@
         dest: "{{ report_csv }}"
         mode: "0644"
         content: |
-          inventory_host,os_family,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,ca2023_alignment,ca2023_summary,decision,root_cause,fix
+          inventory_host,os_family,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,active_bootloader_signature_method,ca2023_alignment,ca2023_summary,decision,root_cause,fix
           {% for host in groups['all'] | difference(['localhost']) | sort %}
           {% set a = hostvars[host].secureboot_assessment | default({}) %}
           {% if a %}
-          {{ host }},{{ a.os_family | default('') }},{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},"{{ (a.ca2023_alignment | default('')) | replace('"', '""') }}","{{ (a.ca2023_summary | default('')) | replace('"', '""') }}",{{ a.decision | default('') }},"{{ (a.root_cause | default('')) | replace('"', '""') }}","{{ (a.fix | default('')) | replace('"', '""') }}"
+          {{ host }},{{ a.os_family | default('') }},{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},"{{ (a.active_bootloader_signature_method | default('')) | replace('"', '""') }}","{{ (a.ca2023_alignment | default('')) | replace('"', '""') }}","{{ (a.ca2023_summary | default('')) | replace('"', '""') }}",{{ a.decision | default('') }},"{{ (a.root_cause | default('')) | replace('"', '""') }}","{{ (a.fix | default('')) | replace('"', '""') }}"
           {% endif %}
           {% endfor %}
 
