@@ -4,16 +4,16 @@
 # Usage:
 #   export GOVC_URL GOVC_USERNAME GOVC_PASSWORD
 #   export GOVC_INSECURE=1   # if needed
-#   ./inventory/vcenter_inspect_vm.sh /SSGLAB_Datacenter/vm/MyVM
+#   ./inventory/vcenter_inspect_vm.sh /SSGLAB_Datacenter/vm/Folder/.../VMName
 #
-# If you only know the VM name, find the path first:
-#   govc find / -type m | grep -i 'MyVM$'
+# If you only know the VM name, find the full path first (VMs are often nested):
+#   govc find /SSGLAB_Datacenter/vm -type m | grep -i 'SL-6-17$'
 
 set -eu
 
 if [ -z "${1:-}" ]; then
-  echo "Usage: $0 /Datacenter/vm/FolderOrVmName" >&2
-  echo "Example: $0 /SSGLAB_Datacenter/vm/SL-6-17" >&2
+  echo "Usage: $0 /Datacenter/vm/.../VMName" >&2
+  echo "Example: $0 /SSGLAB_Datacenter/vm/Secureboot/esx8/win2019esx8secure" >&2
   exit 2
 fi
 
@@ -28,11 +28,26 @@ if [ -z "${GOVC_URL:-}" ]; then
 fi
 
 echo "=== govc vm.info (summary) ==="
-govc vm.info "$VM_PATH" 2>&1 || exit 1
+govc vm.info "$VM_PATH" 2>&1 || {
+  echo "govc vm.info failed — check path (use: govc find / -type m | grep -i 'Name\$')" >&2
+  exit 1
+}
 
 echo ""
 echo "=== JSON fields (inventory-relevant) ==="
-govc vm.info -json "$VM_PATH" | jq '.VirtualMachines[0] | {
+json=$(govc vm.info -json "$VM_PATH" 2>/dev/null) || {
+  echo "govc vm.info -json failed — check path and GOVC_*" >&2
+  exit 1
+}
+
+n=$(echo "$json" | jq -r '.VirtualMachines | length // 0')
+if [ "$n" = "0" ]; then
+  echo "VirtualMachines is empty — path may be wrong (VMs are often under subfolders) or object is not a VM." >&2
+  echo "Try: govc find /SSGLAB_Datacenter/vm -type m | grep -i \"$(basename "$VM_PATH")\"" >&2
+  exit 1
+fi
+
+echo "$json" | jq '.VirtualMachines[0] | {
   Name,
   GuestId: .Config.GuestId,
   GuestFullName: .Guest.GuestFullName,
@@ -44,4 +59,5 @@ govc vm.info -json "$VM_PATH" | jq '.VirtualMachines[0] | {
 
 echo ""
 echo "=== Guest IPv4 (govc vm.ip) ==="
-govc vm.ip -esxi=false -wait=0 "$VM_PATH" 2>&1 || true
+# Do not use -esxi / -wait: older govc builds omit these flags on vm.ip
+govc vm.ip "$VM_PATH" 2>&1 || true

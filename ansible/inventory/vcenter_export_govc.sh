@@ -81,7 +81,8 @@ while IFS= read -r vm_path; do
   [[ -z "$name" ]] && continue
 
   # Prefer first reported guest IPv4; fall back to guest hostname, then VM name
-  ip="$(govc vm.ip -esxi=false -wait=0 "$vm_path" 2>/dev/null | head -1 | tr -d '\r' || true)"
+  # Avoid -esxi/-wait: not all govc builds define those flags on vm.ip
+  ip="$(govc vm.ip "$vm_path" 2>/dev/null | head -1 | tr -d '\r' || true)"
   guest_host=""
   if [[ -n "$vm_json" && "$vm_json" != "null" ]]; then
     guest_host="$(echo "$vm_json" | jq -r '.Guest.HostName // empty' 2>/dev/null || true)"

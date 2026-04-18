@@ -136,7 +136,7 @@ One-liner equivalent:
 
 ```bash
 govc vm.info -json /SSGLAB_Datacenter/vm/SL-6-17 | jq '.VirtualMachines[0] | {Name, GuestId: .Config.GuestId, GuestFullName: .Guest.GuestFullName, Firmware: .Config.Firmware, EfiSecureBoot: .Config.BootOptions.EfiSecureBootEnabled, PowerState: .Runtime.PowerState}'
-govc vm.ip -esxi=false -wait=0 /SSGLAB_Datacenter/vm/SL-6-17
+govc vm.ip /SSGLAB_Datacenter/vm/SL-6-17
 ```
 
 ### Windows / PowerCLI
