@@ -91,8 +91,20 @@ Use [govc](https://github.com/vmware/govmomi/tree/master/govc) on RHEL or any Li
 
 ### 1) Install `govc` and `jq`
 
-- `govc`: [govmomi releases](https://github.com/vmware/govmomi/releases) on `PATH`, or distro package if available.
-- `jq`: e.g. `dnf install jq`.
+- **`jq`:** `dnf install jq` (RHEL/Fedora).
+- **`govc`:** usually install the binary from [govmomi releases](https://github.com/vmware/govmomi/releases) (there is no standard RHEL package). Example for **x86_64**:
+
+```bash
+cd /tmp
+curl -fL -o govc.tar.gz "https://github.com/vmware/govmomi/releases/download/v0.53.0/govc_Linux_x86_64.tar.gz"
+tar -xzf govc.tar.gz govc
+sudo install -m 0755 govc /usr/local/bin/govc
+govc version
+```
+
+For **aarch64**, use `govc_Linux_arm64.tar.gz` instead. Pick the matching asset from the release page if you use a different version.
+
+**TLS / certificate:** If you connect by IP and see `x509: ... doesn't contain any IP SANs`, either use `export GOVC_INSECURE=1` in lab environments or connect with the **hostname** that matches the vCenter certificate and fix DNS/`/etc/hosts`.
 
 ### 2) Point at vCenter
 
@@ -128,6 +140,8 @@ export VCENTER_CSV=/root/secureboot_inventory_full.csv
 ```
 
 If your CSV has **no** `check` column (older exports), use `export VCENTER_INCLUDE_ALL=true` (see `vcenter_csv_inventory.py`).
+
+**Troubleshooting (CSV only has a header row, `wc -l` is 1):** Usually `govc find` returned nothing in that shell — set `GOVC_URL`, credentials, `GOVC_INSECURE` if needed, and scope the search, e.g. `export GOVC_DATACENTER='YourDC'` and `export GOVC_VM_FIND='/YourDC/vm'`. Run `govc find "$GOVC_VM_FIND" -type m | head` manually first. For more detail from the export script: `VCENTER_EXPORT_DEBUG=1 ./inventory/vcenter_export_govc.sh`.
 
 ---
 
