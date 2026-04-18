@@ -60,7 +60,7 @@ vm_from_json() {
 govc_fetch_vm_json() {
   local p="$1" json="" n=0
   case "$p" in
-    /*/*/vm/*)
+    /*/vm/*)
       json="$(govc vm.info -json=true -vm.ipath="$p" 2>/dev/null || true)"
       n="$(echo "${json:-}" | jq '.VirtualMachines // [] | length' 2>/dev/null || echo 0)"
       ;;

@@ -38,8 +38,9 @@ echo "=== JSON fields (inventory-relevant) ==="
 # Positional vm.info -json can yield VirtualMachines: [] even when text vm.info works.
 # For full inventory paths (/DC/vm/...), use -vm.ipath (see govc USAGE / vmware/govmomi issues).
 json=""
+# vCenter paths are /Datacenter/vm/... (one segment before /vm/), not /a/b/vm/...
 case "$VM_PATH" in
-  /*/*/vm/*)
+  /*/vm/*)
     json=$(govc vm.info -json=true -vm.ipath="$VM_PATH" 2>/dev/null) || json=""
     ;;
 esac
@@ -62,11 +63,11 @@ fi
 echo "$json" | jq '.VirtualMachines[0] | {
   Name,
   GuestId: .Config.GuestId,
-  GuestFullName: .Guest.GuestFullName,
+  guest_os: (.Guest.GuestFullName // .Config.GuestId // null),
   HostName: .Guest.HostName,
-  Firmware: .Config.Firmware,
+  firmware: .Config.Firmware,
   PowerState: .Runtime.PowerState,
-  EfiSecureBootEnabled: .Config.BootOptions.EfiSecureBootEnabled
+  secure_boot: .Config.BootOptions.EfiSecureBootEnabled
 }'
 
 echo ""
