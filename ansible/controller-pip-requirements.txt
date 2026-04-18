@@ -2,6 +2,16 @@
 #
 # RHEL / Fedora — if `No module named pip`:
 #   dnf install -y python3-pip
+#
+# Foreman/Katello (foreman-protector blocks dnf): use Foreman’s installer, e.g.:
+#   foreman-maintain packages install python3-pip
+# If still blocked, ask the platform team to allow python3-pip or install pywinrm on the controller image.
+#
+# Then:
 #   cd ansible && python3 -m pip install -r controller-pip-requirements.txt
+#
+# No pip at all — try bootstrap (if allowed):
+#   python3 -m ensurepip --user
+#   ~/.local/bin/pip install --user -r controller-pip-requirements.txt
 pywinrm>=0.4.3
 requests>=2.28.0
