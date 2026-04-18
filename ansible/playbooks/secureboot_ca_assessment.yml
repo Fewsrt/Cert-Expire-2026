@@ -1,0 +1,412 @@
+---
+- name: Assess Windows Secure Boot CA state
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - name: Collect Windows Secure Boot DB and bootloader CA evidence
+      ansible.windows.win_shell:
+        cmd: |
+          $ErrorActionPreference = "Continue"
+
+          function Get-FlagText {
+            param([string]$Text)
+            [PSCustomObject]@{
+              has_2011 = [bool]($Text -match "2011|Windows Production PCA|Microsoft Corporation UEFI CA 2011|Microsoft Corporation KEK CA 2011")
+              has_2023 = [bool]($Text -match "2023|Windows UEFI CA 2023|Microsoft UEFI CA 2023|Microsoft Corporation KEK 2K CA 2023")
+              has_kek_2023 = [bool]($Text -match "Microsoft Corporation KEK 2K CA 2023")
+              has_windows_uefi_ca_2023 = [bool]($Text -match "Windows UEFI CA 2023")
+              has_ms_uefi_ca_2023 = [bool]($Text -match "Microsoft UEFI CA 2023")
+              has_option_rom_2023 = [bool]($Text -match "Microsoft Option ROM UEFI CA 2023")
+            }
+          }
+
+          function Get-SbVarSummary {
+            param([string]$Name)
+            $var = Get-SecureBootUEFI -Name $Name -ErrorAction SilentlyContinue
+            if (-not $var) {
+              return [PSCustomObject]@{
+                name = $Name
+                readable = $false
+                bytes = 0
+                has_2011 = $false
+                has_2023 = $false
+                has_kek_2023 = $false
+                has_windows_uefi_ca_2023 = $false
+                has_ms_uefi_ca_2023 = $false
+                has_option_rom_2023 = $false
+              }
+            }
+
+            $text = [System.Text.Encoding]::ASCII.GetString($var.Bytes)
+            $flags = Get-FlagText -Text $text
+            return [PSCustomObject]@{
+              name = $Name
+              readable = $true
+              bytes = $var.Bytes.Length
+              has_2011 = $flags.has_2011
+              has_2023 = $flags.has_2023
+              has_kek_2023 = $flags.has_kek_2023
+              has_windows_uefi_ca_2023 = $flags.has_windows_uefi_ca_2023
+              has_ms_uefi_ca_2023 = $flags.has_ms_uefi_ca_2023
+              has_option_rom_2023 = $flags.has_option_rom_2023
+            }
+          }
+
+          function Get-CertChainSummary {
+          param([string]$Path)
+          if (-not (Test-Path $Path)) {
+            return [PSCustomObject]@{
+              path = $Path
+              exists = $false
+              signature_status = ""
+              has_2011 = $false
+              has_2023 = $false
+              chain = @()
+            }
+          }
+
+          $sig = Get-AuthenticodeSignature $Path
+          $cert = $sig.SignerCertificate
+          $chainItems = @()
+          $has2011 = $false
+          $has2023 = $false
+
+          if ($cert) {
+            $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+            $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+            $chain.Build($cert) | Out-Null
+            $index = 0
+            foreach ($element in $chain.ChainElements) {
+              $text = $element.Certificate.Subject + " " + $element.Certificate.Issuer
+              $uses2011 = [bool]($text -match "2011|Windows Production PCA")
+              $uses2023 = [bool]($text -match "2023|Windows UEFI CA")
+              $has2011 = $has2011 -or $uses2011
+              $has2023 = $has2023 -or $uses2023
+              $chainItems += [PSCustomObject]@{
+                index = $index
+                subject = $element.Certificate.Subject
+                issuer = $element.Certificate.Issuer
+                not_after = $element.Certificate.NotAfter.ToString("o")
+                uses_2011 = $uses2011
+                uses_2023 = $uses2023
+              }
+              $index += 1
+            }
+          }
+
+          return [PSCustomObject]@{
+            path = $Path
+            exists = $true
+            signature_status = [string]$sig.Status
+            has_2011 = $has2011
+            has_2023 = $has2023
+            chain = $chainItems
+          }
+          }
+
+          $secureBoot = $null
+          try { $secureBoot = [bool](Confirm-SecureBootUEFI) } catch { $secureBoot = $false }
+
+          $vars = @{}
+          foreach ($name in "PK","KEK","db","dbx") {
+          $vars[$name] = Get-SbVarSummary -Name $name
+          }
+
+          $espDrive = $null
+          foreach ($letter in "Z","Y","X","W","V") {
+          if (-not (Test-Path "$letter`:\")) {
+            $espDrive = "$letter`:"
+            break
+          }
+          }
+
+          $espMounted = $false
+          $activeBootloader = $null
+          if ($espDrive) {
+          mountvol $espDrive /S | Out-Null
+          if (Test-Path "$espDrive\EFI\Microsoft\Boot\bootmgfw.efi") {
+            $activeBootloader = "$espDrive\EFI\Microsoft\Boot\bootmgfw.efi"
+            $espMounted = $true
+          }
+          }
+
+          $fallbackBootloader = "$env:SystemRoot\Boot\EFI\bootmgfw.efi"
+          if (-not $activeBootloader -and (Test-Path $fallbackBootloader)) {
+          $activeBootloader = $fallbackBootloader
+          }
+
+          $bootloaderSummary = if ($activeBootloader) {
+          Get-CertChainSummary -Path $activeBootloader
+          } else {
+          [PSCustomObject]@{
+            path = ""
+            exists = $false
+            signature_status = ""
+            has_2011 = $false
+            has_2023 = $false
+            chain = @()
+          }
+          }
+
+          $dbHas2023 = [bool]($vars["db"].has_windows_uefi_ca_2023 -or $vars["db"].has_ms_uefi_ca_2023)
+          $kekHas2023 = [bool]$vars["KEK"].has_kek_2023
+          $decision = "PASS_OR_LOW_RISK"
+          $rootCause = ""
+          $fix = "Keep OS patched; retain evidence and rerun after monthly cumulative updates."
+
+          if (-not $secureBoot) {
+          $decision = "NON_COMPLIANT_OR_OUT_OF_SCOPE"
+          $rootCause = "Secure Boot is disabled or cannot be confirmed"
+          $fix = "Enable UEFI Secure Boot if policy requires it, then rerun assessment."
+          } elseif (-not $kekHas2023) {
+          $decision = "IMPACTED"
+          $rootCause = "KEK 2023 missing"
+          $fix = "Patch Windows, opt in, run Secure-Boot-Update, reboot twice. If still missing on VMware, check PK or regenerate NVRAM."
+          } elseif (-not $dbHas2023) {
+          $decision = "IMPACTED"
+          $rootCause = "db missing UEFI CA 2023"
+          $fix = "Patch Windows, opt in, run Secure-Boot-Update, reboot twice, rerun assessment."
+          } elseif (-not $bootloaderSummary.exists) {
+          $decision = "NEEDS_MANUAL_REVIEW"
+          $rootCause = "Active Windows bootloader was not found"
+          $fix = "Verify EFI system partition and Windows Boot Manager entry."
+          } elseif ($bootloaderSummary.has_2011 -and -not $bootloaderSummary.has_2023) {
+          $decision = "IMPACTED_OR_PENDING_BOOTMGR_TRANSITION"
+          $rootCause = "Active bootloader chain appears to use 2011 CA only"
+          $fix = "After KEK/db 2023 are present, install latest cumulative update, trigger Secure-Boot-Update, reboot twice."
+          }
+
+          if ($espMounted -and $espDrive) {
+          mountvol $espDrive /D | Out-Null
+          }
+
+          [PSCustomObject]@{
+          host = $env:COMPUTERNAME
+          os_family = "windows"
+          secure_boot_enabled = $secureBoot
+          db_has_2011 = [bool]$vars["db"].has_2011
+          db_has_2023 = $dbHas2023
+          kek_has_2023 = $kekHas2023
+          dbx_readable = [bool]$vars["dbx"].readable
+          active_bootloader_file = [string]$bootloaderSummary.path
+          active_bootloader_source = $(if ($bootloaderSummary.path -match "^[A-Z]:\\EFI\\Microsoft\\Boot") { "ESP" } else { "OS_FALLBACK" })
+          active_bootloader_has_2011 = [bool]$bootloaderSummary.has_2011
+          active_bootloader_has_2023 = [bool]$bootloaderSummary.has_2023
+          bootloader_signature_status = [string]$bootloaderSummary.signature_status
+          bootloader_chain = $bootloaderSummary.chain
+          variables = $vars
+          decision = $decision
+          root_cause = $rootCause
+          fix = $fix
+          } | ConvertTo-Json -Depth 8 -Compress
+      register: windows_assessment_raw
+      changed_when: false
+
+    - name: Store Windows assessment fact
+      ansible.builtin.set_fact:
+        secureboot_assessment: "{{ windows_assessment_raw.stdout | from_json }}"
+
+- name: Assess Linux Secure Boot CA state
+  hosts: linux
+  gather_facts: false
+  tasks:
+    - name: Collect Linux Secure Boot DB and bootloader CA evidence
+      ansible.builtin.shell:
+        cmd: |
+          set +e
+          python3 - <<'PY'
+          import glob
+          import json
+          import os
+          import re
+          import subprocess
+
+          def run(cmd):
+            proc = subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            return proc.stdout.strip()
+
+          def has(pattern, text):
+            return bool(re.search(pattern, text or "", re.I))
+
+          def sb_var(name):
+            text = run(f"mokutil --{name} 2>&1")
+            return {
+                "name": name,
+                "readable": bool(text) and not has(r"not supported|failed|error", text),
+                "has_2011": has(r"2011|Windows Production PCA|Microsoft Corporation UEFI CA 2011|Microsoft Corporation KEK CA 2011", text),
+                "has_2023": has(r"2023|Windows UEFI CA 2023|Microsoft UEFI CA 2023|Microsoft Corporation KEK 2K CA 2023", text),
+                "has_kek_2023": has(r"Microsoft Corporation KEK 2K CA 2023", text),
+                "has_windows_uefi_ca_2023": has(r"Windows UEFI CA 2023", text),
+                "has_ms_uefi_ca_2023": has(r"Microsoft UEFI CA 2023", text),
+                "has_option_rom_2023": has(r"Microsoft Option ROM UEFI CA 2023", text),
+                "summary": "\\n".join(line for line in text.splitlines() if re.search(r"^\\[key|Owner:|SHA1 Fingerprint:|Issuer:|Subject:|Not Before:|Not After :", line))[:12000],
+            }
+
+          def active_efi_from_efibootmgr(text):
+            current = ""
+            for line in text.splitlines():
+                if line.startswith("BootCurrent:"):
+                    current = line.split(":", 1)[1].strip()
+                    break
+            if not current:
+                return "", ""
+            pattern = re.compile(rf"^Boot{re.escape(current)}\\*?\\s+(.+)$")
+            for line in text.splitlines():
+                match = pattern.match(line)
+                if not match:
+                    continue
+                raw = match.group(1)
+                path_match = re.search(r"(\\\\EFI\\\\.+?\\.efi)", raw, re.I)
+                if not path_match:
+                    continue
+                efi_path = path_match.group(1).replace("\\\\", "/")
+                return f"/boot/efi{efi_path}", raw
+            return "", ""
+
+          def package_owner(path):
+            if not path or not os.path.exists(path):
+                return ""
+            if run("command -v rpm"):
+                return run(f"rpm -qf {json.dumps(path)}")
+            if run("command -v dpkg"):
+                return run(f"dpkg -S {json.dumps(path)}")
+            return ""
+
+          def signature(path):
+            if not path or not os.path.exists(path):
+                return {"path": path, "exists": False, "has_2011": False, "has_2023": False, "text": ""}
+            if not run("command -v sbverify"):
+                return {"path": path, "exists": True, "has_2011": False, "has_2023": False, "text": "sbverify not installed"}
+            text = run(f"sbverify --list {json.dumps(path)} 2>&1")
+            return {
+                "path": path,
+                "exists": True,
+                "has_2011": has(r"2011|Windows Production PCA|Microsoft Corporation UEFI CA 2011", text),
+                "has_2023": has(r"2023|Windows UEFI CA 2023|Microsoft UEFI CA 2023", text),
+                "text": text[:12000],
+            }
+
+          sb_state = run("mokutil --sb-state 2>&1")
+          efibootmgr = run("efibootmgr -v 2>&1")
+          active_file, active_raw = active_efi_from_efibootmgr(efibootmgr)
+          efi_files = sorted(glob.glob("/boot/efi/EFI/**/*.efi", recursive=True))
+          active_sig = signature(active_file)
+          variables = {name: sb_var(name) for name in ["pk", "kek", "db", "dbx"]}
+          db = variables["db"]
+          kek = variables["kek"]
+          dbx = variables["dbx"]
+          package_versions = ""
+          if run("command -v rpm"):
+            package_versions = run("rpm -qa | grep -Ei '^(shim|shim-x64|grub2|kernel)-' || true")
+          elif run("command -v dpkg"):
+            package_versions = run("dpkg -l shim-signed shim grub-efi-amd64-signed grub2-common linux-image-generic 2>/dev/null || true")
+
+          owner = package_owner(active_file)
+          secure_boot_enabled = has(r"enabled", sb_state)
+          db_has_2023 = bool(db["has_windows_uefi_ca_2023"] or db["has_ms_uefi_ca_2023"])
+          decision = "PASS_OR_LOW_RISK"
+          root_cause = ""
+          fix = "Keep OS patched; retain evidence and rerun after boot-chain updates."
+
+          if not secure_boot_enabled:
+            decision = "NON_COMPLIANT_OR_OUT_OF_SCOPE"
+            root_cause = "Secure Boot is disabled or cannot be confirmed"
+            fix = "Enable UEFI Secure Boot if policy requires it, then rerun assessment."
+          elif not active_file:
+            decision = "NEEDS_MANUAL_REVIEW"
+            root_cause = "Cannot determine active EFI bootloader from efibootmgr"
+            fix = "Verify EFI boot entry and vendor shim path manually."
+          elif active_file and not os.path.exists(active_file):
+            decision = "IMPACTED"
+            root_cause = "Active EFI bootloader path does not exist on disk"
+            fix = "Repair EFI boot entry or reinstall vendor shim/GRUB packages."
+          elif active_file and not owner:
+            decision = "IMPACTED"
+            root_cause = "Active EFI bootloader is not owned by an OS package"
+            fix = "Reinstall/update vendor shim/GRUB packages and recreate EFI boot entry."
+          elif active_sig["text"] == "sbverify not installed":
+            decision = "NEEDS_EVIDENCE"
+            root_cause = "sbverify is not installed; bootloader CA chain not inspected"
+            fix = "Install sbsigntools, rerun assessment, then decide."
+          elif active_sig["has_2011"] and not active_sig["has_2023"]:
+            decision = "IMPACTED_OR_VENDOR_CHAIN_REVIEW"
+            root_cause = "Active EFI bootloader signature shows 2011 CA only"
+            fix = "Update vendor shim/GRUB/kernel packages from supported repos, reboot twice, rerun assessment."
+
+          print(json.dumps({
+            "host": os.uname().nodename,
+            "os_family": "linux",
+            "secure_boot_enabled": secure_boot_enabled,
+            "secure_boot_state": sb_state,
+            "db_has_2011": bool(db["has_2011"]),
+            "db_has_2023": db_has_2023,
+            "kek_has_2023": bool(kek["has_kek_2023"]),
+            "dbx_readable": bool(dbx["readable"]),
+            "active_bootloader_file": active_file,
+            "active_bootloader_raw": active_raw,
+            "active_bootloader_owner": owner,
+            "active_bootloader_has_2011": bool(active_sig["has_2011"]),
+            "active_bootloader_has_2023": bool(active_sig["has_2023"]),
+            "active_bootloader_signature_text": active_sig["text"],
+            "efi_files": efi_files,
+            "package_versions": package_versions,
+            "variables": variables,
+            "decision": decision,
+            "root_cause": root_cause,
+            "fix": fix,
+          }, separators=(",", ":")))
+          PY
+      args:
+        executable: /bin/sh
+      register: linux_assessment_raw
+      changed_when: false
+
+    - name: Store Linux assessment fact
+      ansible.builtin.set_fact:
+        secureboot_assessment: "{{ linux_assessment_raw.stdout | from_json }}"
+
+- name: Write controller reports
+  hosts: localhost
+  gather_facts: false
+  vars:
+    report_dir: "{{ playbook_dir }}/../reports"
+    report_json: "{{ report_dir }}/secureboot_ca_assessment.json"
+    report_csv: "{{ report_dir }}/secureboot_ca_assessment.csv"
+  tasks:
+    - name: Ensure report directory exists
+      ansible.builtin.file:
+        path: "{{ report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write JSON report
+      ansible.builtin.copy:
+        dest: "{{ report_json }}"
+        mode: "0644"
+        content: |
+          [
+          {% for host in groups['all'] | difference(['localhost']) | sort %}
+          {% if hostvars[host].secureboot_assessment is defined %}
+          {{ hostvars[host].secureboot_assessment | combine({'inventory_host': host}) | to_nice_json }}{% if not loop.last %},{% endif %}
+          {% endif %}
+          {% endfor %}
+          ]
+
+    - name: Write CSV report
+      ansible.builtin.copy:
+        dest: "{{ report_csv }}"
+        mode: "0644"
+        content: |
+          inventory_host,os_family,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,decision,root_cause,fix
+          {% for host in groups['all'] | difference(['localhost']) | sort %}
+          {% set a = hostvars[host].secureboot_assessment | default({}) %}
+          {% if a %}
+          {{ host }},{{ a.os_family | default('') }},{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},{{ a.decision | default('') }},"{{ (a.root_cause | default('')) | replace('"', '""') }}","{{ (a.fix | default('')) | replace('"', '""') }}"
+          {% endif %}
+          {% endfor %}
+
+    - name: Show report paths
+      ansible.builtin.debug:
+        msg:
+          - "JSON: {{ report_json }}"
+          - "CSV: {{ report_csv }}"

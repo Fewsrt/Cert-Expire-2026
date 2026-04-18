@@ -17,3 +17,5 @@ This folder splits the runbook into topic-focused documents.
 - [14-vm-ca2023-test-cases.md](14-vm-ca2023-test-cases.md)
 - [15-minimum-vm-os-esxi-test-list.md](15-minimum-vm-os-esxi-test-list.md)
 - [16-firebase-web-deploy.md](16-firebase-web-deploy.md)
+- [17-final-decision-runbook.md](17-final-decision-runbook.md)
+- [18-ansible-secureboot-ca-assessment.md](18-ansible-secureboot-ca-assessment.md)

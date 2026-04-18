@@ -639,6 +639,8 @@ Remediation:
 
 ## 8) Test cases: Linux VM
 
+Use the final decision model in [17-final-decision-runbook.md](17-final-decision-runbook.md). Linux test cases should not rely on OS version alone. The final result must come from Secure Boot state, active EFI boot path, package ownership, and shim/GRUB signature evidence.
+
 ### TC-LX-01 — Linux baseline Secure Boot boot chain
 
 OS to run:
@@ -656,34 +658,31 @@ Steps:
 
 1. install OS จาก supported ISO
 2. update package ล่าสุดจาก official repo
-3. verify:
-   ```bash
-   mokutil --sb-state
-   mokutil --pk
-   mokutil --kek
-   mokutil --db
-   mokutil --dbx
-   ```
-4. verify package:
-   ```bash
-   rpm -q shim grub2-efi-x64 grub2-tools kernel || true
-   dpkg -l shim-signed shim grub-efi-amd64-signed grub2-common linux-image-generic || true
-   ```
-5. reboot 2 รอบ
+3. run `Linux final Secure Boot impact assessment` จาก web app
+4. ถ้า command แจ้งว่า `sbverify not installed` ให้ติดตั้ง `sbsigntools` แล้ว rerun assessment
+5. ถ้า impacted ให้ run `Linux final remediation workflow`
+6. reboot 2 รอบ
+7. rerun `Linux final Secure Boot impact assessment`
 
 Expected:
 
 - `SecureBoot enabled`
 - boot ได้หลัง update/reboot
 - shim/grub/kernel มาจาก supported vendor repo
+- active EFI boot path ชี้ไป vendor shim
+- EFI boot files มี package owner
+- signature evidence ของ shim/GRUB ถูกเก็บแล้ว
 
 Impact decision:
 
 - ถ้าใช้ unsupported distro หรือ pinned old shim/grub ให้ถือว่า high risk
+- ถ้า EFI files ไม่ owned by package ให้ถือว่า impacted
+- ถ้า active boot path ไม่ผ่าน vendor shim ให้ needs review
+- ถ้า signature chain unexpected/revoked หรือ Secure Boot boot fail ให้ impacted
 
 Remediation:
 
-- update shim/grub/kernel
+- update vendor shim/grub/kernel packages
 - ถ้า boot fail ให้ disable Secure Boot ชั่วคราว, boot เข้า OS, update boot chain, แล้วเปิด Secure Boot ใหม่
 
 ### TC-LX-02 — Linux with old shim/GRUB simulation

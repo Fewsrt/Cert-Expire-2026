@@ -1405,7 +1405,7 @@ certutil -dump PK.der`
 
   const linuxRhel = {
     label: "RHEL-family Secure Boot summary check",
-    description: "สรุปผล PK/KEK/db/dbx แบบอ่านง่าย ไม่ dump certificate ทั้งใบ และเช็ค shim, GRUB, kernel จาก repo ที่ support",
+    description: "สรุปผล PK/KEK/db/dbx, boot entry, package owner และ signature ของ shim/GRUB โดยแยกคำสั่งชัดเจนไม่ให้ grep อ่านไฟล์ .efi",
     code: `echo "===== Secure Boot state ====="
 mokutil --sb-state
 
@@ -1433,8 +1433,58 @@ echo "$dbx_output" | grep -E "^\\[key|\\[SHA|^[[:space:]]+[0-9a-f]{64}$" | head 
 echo "DBX_Readable=$(echo "$dbx_output" | grep -qi "SHA\\|Certificate\\|Fingerprint" && echo true || echo false)"
 
 echo
+echo "===== EFI boot path ====="
+if command -v efibootmgr >/dev/null 2>&1; then
+  efibootmgr -v
+else
+  echo "efibootmgr not installed"
+fi
+
+echo
+echo "===== EFI files ====="
+if [ -d /boot/efi/EFI ]; then
+  find /boot/efi/EFI -type f -iname "*.efi" -exec file {} \\;
+else
+  echo "/boot/efi/EFI not found"
+fi
+
+echo
 echo "===== package versions ====="
-rpm -q shim grub2-efi-x64 grub2-tools kernel`
+rpm -qa | grep -Ei "^(shim|shim-x64|grub2-efi|grub2-tools|kernel)-" || true
+rpm -q shim-x64 shim grub2-efi-x64 grub2-tools kernel || true
+
+echo
+echo "===== EFI file package owners ====="
+for efi_file in \\
+  /boot/efi/EFI/redhat/shimx64.efi \\
+  /boot/efi/EFI/redhat/grubx64.efi \\
+  /boot/efi/EFI/BOOT/BOOTX64.EFI
+do
+  if [ -f "$efi_file" ]; then
+    echo "$efi_file"
+    rpm -qf "$efi_file" || true
+  else
+    echo "$efi_file not found"
+  fi
+done
+
+echo
+echo "===== EFI signatures ====="
+if command -v sbverify >/dev/null 2>&1; then
+  for efi_file in \\
+    /boot/efi/EFI/redhat/shimx64.efi \\
+    /boot/efi/EFI/redhat/grubx64.efi \\
+    /boot/efi/EFI/BOOT/BOOTX64.EFI
+  do
+    if [ -f "$efi_file" ]; then
+      echo
+      echo "===== sbverify: $efi_file ====="
+      sbverify --list "$efi_file" || true
+    fi
+  done
+else
+  echo "sbverify not installed; install sbsigntools to inspect EFI signatures"
+fi`
   };
 
   const linuxUbuntu = {
@@ -1482,13 +1532,281 @@ mv vmname.nvram vmname.nvram_old
 # Then rerun Windows CA/KEK checks`
   };
 
-  if (testCase.os.includes("Ubuntu")) return [linuxUbuntu];
-  if (testCase.os.includes("RHEL") || testCase.os.includes("Rocky") || testCase.os.includes("Oracle")) return [linuxRhel];
-  if (testCase.id === "1.2") return [{ label: "Windows Secure Boot state", code: "Confirm-SecureBootUEFI" }];
-  if (testCase.id === "1.3") return [windowsPatchCheck, windowsCheck, windowsBootloader, windowsBootloaderChain, windowsEventCheck, windowsEventGuide, pkCheck, windowsOnlineUpdate, windowsOfflineUpdate];
-  if (testCase.id === "2.2") return [windowsPatchCheck, windowsCheck, windowsBootloader, windowsBootloaderChain, windowsEventCheck, windowsEventGuide, windowsTrigger, esxiNvram, windowsOnlineUpdate, windowsOfflineUpdate];
-  if (testCase.id === "4.2") return [bitLocker, windowsPatchCheck, windowsCheck, windowsBootloader, windowsBootloaderChain, windowsEventCheck, windowsTrigger, windowsOnlineUpdate, windowsOfflineUpdate];
-  return [windowsPatchCheck, windowsCheck, windowsBootloader, windowsBootloaderChain, windowsEventCheck, windowsEventGuide, windowsTrigger, windowsOnlineUpdate, windowsOfflineUpdate];
+  const windowsFinalAssessment = {
+    label: "Windows final Secure Boot impact assessment",
+    description: "รันครั้งเดียวเพื่อสรุป Secure Boot, CA/KEK/db/dbx, event, boot manager CA chain และ remediation decision",
+    code: `$ErrorActionPreference = "Continue"
+
+function Test-TextFlag {
+  param([string]$Text, [string]$Pattern)
+  return [bool]($Text -match [regex]::Escape($Pattern))
+}
+
+Write-Host "===== Secure Boot state ====="
+$secureBoot = $null
+try { $secureBoot = Confirm-SecureBootUEFI } catch { Write-Host $_.Exception.Message }
+"SecureBoot=$secureBoot"
+
+Write-Host "\`n===== OS and patch level ====="
+Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsBuildNumber, OsHardwareAbstractionLayer
+Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 10 HotFixID, Description, InstalledOn, InstalledBy
+
+Write-Host "\`n===== Secure Boot variables summary ====="
+$summary = @()
+foreach ($name in "PK","KEK","db","dbx") {
+  $var = Get-SecureBootUEFI -Name $name -ErrorAction SilentlyContinue
+  if (-not $var) {
+    $summary += [PSCustomObject]@{ Name=$name; Readable=$false; Bytes=0; KEK2023=$false; WindowsUEFICA2023=$false; MicrosoftUEFICA2023=$false; OptionROM2023=$false; Has2011=$false }
+    continue
+  }
+  $text = [System.Text.Encoding]::ASCII.GetString($var.Bytes)
+  $summary += [PSCustomObject]@{
+    Name=$name
+    Readable=$true
+    Bytes=$var.Bytes.Length
+    KEK2023=Test-TextFlag $text "Microsoft Corporation KEK 2K CA 2023"
+    WindowsUEFICA2023=Test-TextFlag $text "Windows UEFI CA 2023"
+    MicrosoftUEFICA2023=Test-TextFlag $text "Microsoft UEFI CA 2023"
+    OptionROM2023=Test-TextFlag $text "Microsoft Option ROM UEFI CA 2023"
+    Has2011=($text -match "2011")
+  }
+}
+$summary | Format-Table -AutoSize
+
+Write-Host "\`n===== Boot manager signature and CA chain ====="
+$bootFiles = @(
+  "$env:SystemRoot\\Boot\\EFI\\bootmgfw.efi",
+  "$env:SystemDrive\\EFI\\Microsoft\\Boot\\bootmgfw.efi"
+) | Select-Object -Unique
+
+$bootChainUses2023 = $false
+$bootChainUses2011 = $false
+$bootFileFound = $false
+foreach ($path in $bootFiles) {
+  if (-not (Test-Path $path)) {
+    [PSCustomObject]@{ Path=$path; Exists=$false } | Format-List
+    continue
+  }
+  $bootFileFound = $true
+  Write-Host "\`n----- $path -----"
+  $sig = Get-AuthenticodeSignature $path
+  $sig | Format-List Status, StatusMessage, Path
+  $cert = $sig.SignerCertificate
+  if (-not $cert) {
+    Write-Host "SignerCertificate is empty. Use signtool fallback if available: signtool verify /pa /v \`"$path\`""
+    continue
+  }
+
+  $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+  $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+  $chain.Build($cert) | Out-Null
+  $index = 0
+  foreach ($element in $chain.ChainElements) {
+    $text = $element.Certificate.Subject + " " + $element.Certificate.Issuer
+    $uses2023 = $text -match "2023|Windows UEFI CA"
+    $uses2011 = $text -match "2011|Windows Production PCA"
+    $bootChainUses2023 = $bootChainUses2023 -or $uses2023
+    $bootChainUses2011 = $bootChainUses2011 -or $uses2011
+    [PSCustomObject]@{
+      Index=$index
+      Subject=$element.Certificate.Subject
+      Issuer=$element.Certificate.Issuer
+      NotAfter=$element.Certificate.NotAfter
+      Uses2023CA=$uses2023
+      Uses2011CA=$uses2011
+    } | Format-List
+    $index += 1
+  }
+}
+
+Write-Host "\`n===== Secure Boot update events ====="
+$ids = 1032,1036,1043,1044,1045,1795,1796,1797,1798,1799,1800,1801,1802,1803,1808
+Get-WinEvent -FilterHashtable @{LogName='System'; Id=$ids} -MaxEvents 50 -ErrorAction SilentlyContinue |
+  Select-Object TimeCreated, Id, ProviderName, LevelDisplayName, Message
+
+Write-Host "\`n===== Final decision ====="
+$kek2023 = [bool](($summary | Where-Object Name -eq "KEK").KEK2023)
+$db = $summary | Where-Object Name -eq "db"
+$dbHas2023 = [bool]($db.WindowsUEFICA2023 -or $db.MicrosoftUEFICA2023)
+$dbxReadable = [bool](($summary | Where-Object Name -eq "dbx").Readable)
+
+if ($secureBoot -ne $true) {
+  "Decision=NON_COMPLIANT_OR_OUT_OF_SCOPE"
+  "Fix=Enable UEFI Secure Boot if policy requires it, then rerun this assessment."
+} elseif (-not $kek2023) {
+  "Decision=IMPACTED"
+  "RootCause=KEK 2023 missing. Firmware may not accept future db/dbx updates."
+  "Fix=Patch Windows, set MicrosoftUpdateManagedOptIn, run Secure-Boot-Update task, reboot twice. If still missing on VMware VM, regenerate NVRAM or fix PK."
+} elseif (-not $dbHas2023) {
+  "Decision=IMPACTED"
+  "RootCause=db is missing Microsoft/Windows UEFI CA 2023."
+  "Fix=Patch Windows, opt in, run Secure-Boot-Update task, reboot twice, then rerun assessment."
+} elseif (-not $bootFileFound) {
+  "Decision=NEEDS_MANUAL_REVIEW"
+  "RootCause=bootmgfw.efi not found in expected paths."
+  "Fix=Verify EFI system partition and boot entry manually."
+} elseif ($bootChainUses2011 -and -not $bootChainUses2023) {
+  "Decision=IMPACTED_OR_PENDING_BOOTMGR_TRANSITION"
+  "RootCause=Active boot manager chain appears to use 2011 CA only."
+  "Fix=After CA/KEK 2023 are present, install latest cumulative update, run Secure-Boot-Update task, reboot twice, then rerun assessment."
+} elseif (-not $dbxReadable) {
+  "Decision=NEEDS_MANUAL_REVIEW"
+  "RootCause=dbx was not readable."
+  "Fix=Check firmware/UEFI variable access and vendor platform health."
+} else {
+  "Decision=PASS_OR_LOW_RISK"
+  "Fix=No emergency remediation. Keep OS patched and keep evidence from this run."
+}`
+  };
+
+  const windowsFinalFix = {
+    label: "Windows final remediation workflow",
+    description: "ใช้แก้จริงตามลำดับ: patch, opt-in, trigger task, reboot, retest; มี VMware NVRAM/PK branch ถ้า KEK/db ยังไม่เข้า",
+    code: `# 1) Patch first: install latest cumulative update from Windows Update, WSUS, SCCM, or offline MSU/CAB.
+# GUI: start ms-settings:windowsupdate
+# Server Core: sconfig -> option 6
+
+# 2) Opt in to Microsoft-managed Secure Boot updates.
+reg add HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot /v MicrosoftUpdateManagedOptIn /t REG_DWORD /d 1 /f
+
+# 3) Trigger the Secure Boot update task.
+Start-ScheduledTask -TaskName "\\Microsoft\\Windows\\PI\\Secure-Boot-Update"
+
+# 4) Reboot, rerun "Windows final Secure Boot impact assessment", then reboot once more and rerun again.
+Restart-Computer
+
+# 5) If KEK 2023/db 2023 is still missing after patch + task + two reboots:
+# - Check System events 1795/1796/1801/1802/1803.
+# - For VMware VM created from old ESXi/NVRAM lineage: power off, snapshot, rename/regenerate .nvram, then retest.
+# - If PK is invalid or unreadable: repair/enroll platform key using vendor/VM firmware procedure, then retest.
+# - If boot manager still uses only 2011 CA after CA/KEK 2023 are present: install latest CU again, trigger task, reboot twice.`
+  };
+
+  const linuxFinalAssessment = {
+    label: "Linux final Secure Boot impact assessment",
+    description: "รันครั้งเดียวเพื่อสรุป Secure Boot, firmware CA/KEK/db/dbx, active EFI boot path, package ownership และ shim/GRUB signatures",
+    code: `echo "===== Secure Boot state ====="
+mokutil --sb-state 2>&1 || true
+
+summarize_var() {
+  name="$1"
+  echo
+  echo "===== $name summary ====="
+  output="$(mokutil --"$name" 2>&1)"
+  echo "$output" | grep -E "^\\[key|Owner:|SHA1 Fingerprint:|Issuer:|Subject:|Not Before:|Not After :" || true
+  echo "Has_MS_KEK_2K_CA_2023=$(echo "$output" | grep -qi "Microsoft Corporation KEK 2K CA 2023" && echo true || echo false)"
+  echo "Has_Windows_UEFI_CA_2023=$(echo "$output" | grep -qi "Windows UEFI CA 2023" && echo true || echo false)"
+  echo "Has_MS_UEFI_CA_2023=$(echo "$output" | grep -qi "Microsoft UEFI CA 2023" && echo true || echo false)"
+  echo "Has_MS_Option_ROM_UEFI_CA_2023=$(echo "$output" | grep -qi "Microsoft Option ROM UEFI CA 2023" && echo true || echo false)"
+  echo "Has_2011_CA=$(echo "$output" | grep -qi "2011" && echo true || echo false)"
+}
+
+summarize_var pk
+summarize_var kek
+summarize_var db
+
+echo
+echo "===== dbx summary ====="
+dbx_output="$(mokutil --dbx 2>&1)"
+echo "$dbx_output" | grep -E "^\\[key|\\[SHA|^[[:space:]]+[0-9a-f]{64}$" | head -80 || true
+echo "DBX_Readable=$(echo "$dbx_output" | grep -qi "SHA\\|Certificate\\|Fingerprint" && echo true || echo false)"
+
+echo
+echo "===== active EFI boot path ====="
+if command -v efibootmgr >/dev/null 2>&1; then
+  efibootmgr -v
+else
+  echo "efibootmgr not installed"
+fi
+
+echo
+echo "===== EFI files ====="
+if [ -d /boot/efi/EFI ]; then
+  find /boot/efi/EFI -type f -iname "*.efi" -exec file {} \\;
+else
+  echo "/boot/efi/EFI not found"
+fi
+
+echo
+echo "===== package versions ====="
+if command -v rpm >/dev/null 2>&1; then
+  rpm -qa | grep -Ei "^(shim|shim-x64|grub2|kernel)-" || true
+  rpm -q shim-x64 shim grub2-efi-x64 grub2-tools grub2-x86_64-efi kernel kernel-default || true
+elif command -v dpkg >/dev/null 2>&1; then
+  dpkg -l shim-signed shim grub-efi-amd64-signed grub2-common linux-image-generic 2>/dev/null || true
+fi
+
+echo
+echo "===== EFI file package owners ====="
+for efi_file in \\
+  /boot/efi/EFI/redhat/shimx64.efi \\
+  /boot/efi/EFI/redhat/grubx64.efi \\
+  /boot/efi/EFI/ubuntu/shimx64.efi \\
+  /boot/efi/EFI/ubuntu/grubx64.efi \\
+  /boot/efi/EFI/sles/shim.efi \\
+  /boot/efi/EFI/sles/grub.efi \\
+  /boot/efi/EFI/BOOT/BOOTX64.EFI
+do
+  [ -f "$efi_file" ] || continue
+  echo "$efi_file"
+  if command -v rpm >/dev/null 2>&1; then
+    rpm -qf "$efi_file" || true
+  elif command -v dpkg >/dev/null 2>&1; then
+    dpkg -S "$efi_file" || true
+  fi
+done
+
+echo
+echo "===== EFI signatures ====="
+if command -v sbverify >/dev/null 2>&1; then
+  find /boot/efi/EFI -type f -iname "*.efi" -print 2>/dev/null | while IFS= read -r efi_file; do
+    echo
+    echo "===== sbverify: $efi_file ====="
+    sbverify --list "$efi_file" || true
+  done
+else
+  echo "sbverify not installed. Install sbsigntools to inspect shim/GRUB signatures."
+fi
+
+echo
+echo "===== Final decision guide ====="
+echo "PASS/LOW_RISK when: SecureBoot enabled, active boot path points to vendor shim, shim/GRUB files are owned by supported packages, packages are current, and system reboots twice."
+echo "IMPACTED when: Secure Boot fails, boot files are unowned/stale, shim/GRUB packages are pinned/old/unsupported, sbverify shows unexpected or revoked chain, or db/dbx update causes boot failure."
+echo "FIX: update vendor shim/GRUB/kernel packages from supported repos, reboot twice, rerun this assessment. If unbootable, temporarily disable Secure Boot, update boot chain, re-enable Secure Boot, retest."`
+  };
+
+  const linuxFinalFix = {
+    label: "Linux final remediation workflow",
+    description: "ใช้แก้จริงเมื่อ boot chain เก่า, package ไม่ครบ, หรือ Secure Boot/dbx update แล้ว boot fail",
+    code: `# RHEL / Rocky / Alma / Oracle Linux
+sudo dnf clean all
+sudo dnf update 'shim*' 'grub2*' 'kernel*'
+sudo reboot
+
+# Ubuntu / Debian family
+sudo apt update
+sudo apt install --only-upgrade shim-signed shim grub-efi-amd64-signed grub2-common linux-image-generic
+sudo reboot
+
+# SLES / SUSE
+sudo zypper refresh
+sudo zypper update shim grub2-x86_64-efi kernel-default
+sudo reboot
+
+# If the VM cannot boot with Secure Boot enabled:
+# 1. Temporarily disable Secure Boot in VM firmware/settings.
+# 2. Boot the OS.
+# 3. Apply the vendor package update above.
+# 4. Re-enable Secure Boot.
+# 5. Rerun "Linux final Secure Boot impact assessment" and reboot twice.`
+  };
+
+  if (testCase.os.includes("Ubuntu")) return [linuxFinalAssessment, linuxFinalFix];
+  if (testCase.os.includes("RHEL") || testCase.os.includes("Rocky") || testCase.os.includes("Oracle") || testCase.os.includes("SLES")) return [linuxFinalAssessment, linuxFinalFix];
+  if (testCase.id === "1.2") return [windowsFinalAssessment];
+  if (testCase.id === "1.3" || testCase.id === "2.2") return [windowsFinalAssessment, windowsFinalFix, pkCheck, esxiNvram];
+  if (testCase.id === "4.2") return [bitLocker, windowsFinalAssessment, windowsFinalFix];
+  return [windowsFinalAssessment, windowsFinalFix];
 }
 
 function loadLocalResults() {

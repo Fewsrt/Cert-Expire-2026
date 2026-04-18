@@ -14,6 +14,8 @@ Linux VMs that boot with **UEFI + Secure Boot** can be impacted mainly by:
 ## Recommended approach
 - Keep distros supported and updated (shim/grub/kernel updates)
 - Test dbx-related changes on a non-critical VM first
+- Use `Linux final Secure Boot impact assessment` from the web app for the final yes/no decision.
+- Use `Linux final remediation workflow` from the web app for the standard fix path.
 
 ## Version impact matrix (practical)
 > Linux impact is not decided by OS major version alone.  
@@ -45,32 +47,11 @@ Linux VMs that boot with **UEFI + Secure Boot** can be impacted mainly by:
 - `Oracle Linux`: follow Oracle Secure Boot notices and apply the matching shim/cert updates as one change set.
 - `Ubuntu`: keep `shim-signed` and signed GRUB from the release update channel; avoid pinning old boot packages.
 
-## Quick checks by distro
-### Universal
-```bash
-mokutil --sb-state
-mokutil --list-enrolled
-```
-
-### Debian / Ubuntu
-```bash
-dpkg -l shim-signed shim grub-efi-amd64-signed
-```
-
-### RHEL / Oracle Linux / Rocky / Alma
-```bash
-rpm -q shim grub2
-```
-
 ## If you need a yes/no decision
-1. Verify Secure Boot is enabled and boot is successful.
-2. Verify current signed boot-chain packages are installed from supported vendor channels.
-3. Reboot at least 2 times after updates and re-check.
-4. If any failure appears, treat as impacted and run recovery path.
-
-## Quick verification (inside Linux)
-
-```bash
-mokutil --sb-state
-mokutil --list-enrolled
-```
+1. Run `Linux final Secure Boot impact assessment`.
+2. Confirm Secure Boot is enabled.
+3. Confirm active EFI boot path points to vendor shim.
+4. Confirm shim/GRUB EFI files are owned by supported vendor packages.
+5. Confirm `sbverify` evidence is collected for active EFI files.
+6. Reboot at least 2 times after updates and rerun assessment.
+7. If any failure appears, treat as impacted and run `Linux final remediation workflow`.

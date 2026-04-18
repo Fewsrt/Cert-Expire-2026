@@ -512,29 +512,23 @@ Steps:
 
 1. ติดตั้ง OS จาก supported ISO
 2. update package ล่าสุด
-3. run:
-   ```bash
-   mokutil --sb-state
-   mokutil --pk
-   mokutil --kek
-   mokutil --db
-   mokutil --dbx
-   rpm -q shim grub2-efi-x64 grub2-tools kernel
-   ```
+3. run `Linux final Secure Boot impact assessment` จาก web app
 4. reboot 2 รอบ
-5. run check ซ้ำ
+5. run assessment ซ้ำ
 
 Expected:
 
 - `SecureBoot enabled`
 - boot ได้ทุกครั้ง
 - shim/grub/kernel มาจาก supported repo
+- active EFI boot path ชี้ไป vendor shim
+- EFI boot files มี package owner และมี signature evidence
 
 ถ้า fail:
 
 - ปิด Secure Boot ชั่วคราว
 - boot เข้า OS
-- update `shim`, `grub2`, `kernel`
+- run `Linux final remediation workflow`
 - เปิด Secure Boot กลับแล้ว retest
 
 ---
@@ -787,21 +781,10 @@ Expected:
 
 1. ปิด Secure Boot ชั่วคราวใน VM settings
 2. boot เข้า Linux
-3. update boot chain:
-   ```bash
-   # RHEL-family
-   sudo dnf update shim grub2-efi-x64 grub2-tools kernel
-
-   # Ubuntu/Debian
-   sudo apt update
-   sudo apt install --only-upgrade shim-signed grub-efi-amd64-signed grub2-common linux-image-generic
-   ```
+3. run `Linux final remediation workflow`
 4. reboot
 5. เปิด Secure Boot กลับ
-6. verify:
-   ```bash
-   mokutil --sb-state
-   ```
+6. run `Linux final Secure Boot impact assessment`
 
 ### 11.9 Unsupported OS
 
