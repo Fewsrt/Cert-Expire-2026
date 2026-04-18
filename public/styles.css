@@ -48,6 +48,23 @@ button.filter {
   color: var(--ink);
 }
 
+.csv-upload-button {
+  min-height: 40px;
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 8px 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.csv-upload-button input {
+  display: none;
+}
+
 button.danger {
   border-color: var(--red);
   background: var(--red);
@@ -229,6 +246,101 @@ code {
 .toolbar {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
+}
+
+.csv-import-dialog {
+  width: min(1180px, calc(100% - 24px));
+  max-height: min(820px, calc(100vh - 24px));
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 0;
+}
+
+.csv-import-dialog::backdrop {
+  background: rgba(32, 35, 34, 0.56);
+}
+
+.csv-import-panel {
+  display: grid;
+  gap: 14px;
+  max-height: min(820px, calc(100vh - 24px));
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.csv-import-panel[hidden] {
+  display: none;
+}
+
+.csv-import-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+}
+
+.csv-import-head h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.csv-import-head p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.csv-import-list {
+  display: grid;
+  gap: 10px;
+}
+
+.csv-map-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.1fr) repeat(5, minmax(120px, 0.85fr)) minmax(220px, 1.2fr);
+  gap: 10px;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  padding: 10px;
+}
+
+.csv-cell,
+.csv-case-select {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
+
+.csv-cell span,
+.csv-case-select span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.csv-cell strong {
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.csv-case-select select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  padding: 10px;
 }
 
 .search-box {
@@ -430,14 +542,14 @@ code {
 }
 
 .tracker-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  grid-template-columns: none;
+  display: grid;
+  grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.25fr);
+  gap: 14px;
 }
 
 .tracker-form-intro {
-  margin-bottom: 14px;
+  grid-column: 1 / -1;
+  margin-bottom: 0;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--line);
 }
@@ -455,11 +567,21 @@ code {
 }
 
 .form-fieldset {
-  margin: 0 0 14px;
+  margin: 0;
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-soft);
+}
+
+.status-fieldset,
+.report-fieldset {
+  grid-column: 1;
+}
+
+.manual-fieldset {
+  grid-column: 2;
+  grid-row: 2 / span 2;
 }
 
 .form-fieldset legend {
@@ -494,11 +616,62 @@ code {
 
 .fieldset-stack {
   display: grid;
-  gap: 10px;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  height: 100%;
 }
 
-.evidence-file-label {
-  display: block;
+.ansible-check-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.ansible-check-grid div {
+  min-height: 78px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
+
+.ansible-check-grid dt {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ansible-check-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.report-value {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  border-radius: 8px;
+  padding: 5px 9px;
+  background: var(--panel-soft);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.report-value.true {
+  background: #e8f5f0;
+  color: #0d4a32;
+}
+
+.report-value.false {
+  background: #fdeff0;
+  color: #7a1a22;
+}
+
+.report-value.empty {
+  color: var(--muted);
+  font-weight: 400;
 }
 
 .form-footer {
@@ -513,332 +686,12 @@ code {
   color: var(--muted);
 }
 
-.evidence-gallery {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.evidence-item {
-  display: grid;
-  gap: 6px;
-}
-
-.evidence-preview {
-  display: block;
-  min-height: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--panel-soft);
-  padding: 0;
-}
-
-.evidence-preview img {
-  display: block;
-  width: 100%;
-  aspect-ratio: 4 / 3;
-  object-fit: cover;
-}
-
-.delete-image {
-  min-height: 34px;
-  border-color: var(--red);
-  background: #fff;
-  color: var(--red);
-}
-
-.download-image {
-  min-height: 34px;
-  background: #fff;
-  color: var(--ink);
-}
-
-.image-modal {
-  width: min(1100px, calc(100% - 24px));
-  border: 0;
-  border-radius: 8px;
-  padding: 0;
-  background: #fff;
-}
-
-.image-modal::backdrop {
-  background: rgba(0, 0, 0, 0.72);
-}
-
-.image-modal-content {
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-}
-
-.modal-toolbar {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-}
-
-.modal-image-frame {
-  max-height: 76vh;
-  overflow: auto;
-  background: #111;
-  border-radius: 8px;
-}
-
-.image-modal img {
-  display: block;
-  width: auto;
-  max-width: none;
-  height: auto;
-  transform-origin: top left;
-}
-
-.image-modal p {
-  margin: 0;
-  color: var(--muted);
-}
-
 .summary-view {
   display: none;
 }
 
 .summary-view.active-view {
   display: block;
-}
-
-.readiness-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-  margin-bottom: 20px;
-  padding: 24px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
-.readiness-hero h2 {
-  margin: 8px 0 0;
-  font-size: clamp(26px, 3.5vw, 40px);
-  line-height: 1.1;
-}
-
-.readiness-intro {
-  margin: 12px 0 0;
-  color: var(--muted);
-  max-width: 72ch;
-  line-height: 1.45;
-}
-
-.readiness-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.readiness-card {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 20px 22px;
-}
-
-.readiness-card-inner {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.readiness-card-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.readiness-card-head-right {
-  flex-shrink: 0;
-}
-
-.readiness-eyebrow {
-  margin: 0;
-  font-size: 13px;
-  color: var(--muted);
-  letter-spacing: 0.02em;
-}
-
-.readiness-title {
-  margin: 0;
-  font-size: 1.35rem;
-  font-weight: 700;
-}
-
-.readiness-tier-badge {
-  display: inline-block;
-  padding: 6px 12px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 600;
-  border: 1px solid var(--line);
-  background: var(--panel-soft);
-  color: var(--ink);
-}
-
-.readiness-tier-badge.tier-not-impacted {
-  border-color: #9bc4b4;
-  background: #e8f5f0;
-  color: #0d4a32;
-}
-
-.readiness-tier-badge.tier-needs-review {
-  border-color: #e0c28a;
-  background: #fff8e8;
-  color: #6a4a00;
-}
-
-.readiness-tier-badge.tier-action-required {
-  border-color: #e0a8a8;
-  background: #fdeff0;
-  color: #7a1a22;
-}
-
-.readiness-tier-badge.legacy-status-pending,
-.readiness-tier-badge.legacy-status-in-progress {
-  border-color: var(--line);
-  background: #f0f0ec;
-}
-
-.readiness-tier-badge.legacy-status-pass {
-  border-color: #9bc4b4;
-  background: #e8f5f0;
-  color: #0d4a32;
-}
-
-.readiness-tier-badge.legacy-status-fail,
-.readiness-tier-badge.legacy-status-exception {
-  border-color: #e0a8a8;
-  background: #fdeff0;
-  color: #7a1a22;
-}
-
-.readiness-summary {
-  margin: 0;
-  font-size: 1.05rem;
-  line-height: 1.5;
-  color: var(--ink);
-}
-
-.readiness-meta {
-  margin: 0;
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.readiness-legacy-msg {
-  margin: 0;
-  padding: 10px 12px;
-  background: var(--panel-soft);
-  border-radius: 6px;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.45;
-}
-
-.readiness-hosts h4 {
-  margin: 16px 0 8px;
-  font-size: 15px;
-}
-
-.readiness-host-details {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px 12px;
-  margin-bottom: 8px;
-  background: #fafaf8;
-}
-
-.readiness-host-details summary {
-  cursor: pointer;
-  font-weight: 600;
-  list-style: none;
-}
-
-.readiness-host-details summary::-webkit-details-marker {
-  display: none;
-}
-
-.readiness-host-name {
-  font-family: ui-monospace, monospace;
-  font-size: 14px;
-}
-
-.readiness-host-tier {
-  margin-left: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-}
-
-.readiness-host-body {
-  margin-top: 10px;
-  padding-left: 4px;
-}
-
-.readiness-host-headline {
-  margin: 0 0 8px;
-  font-size: 14px;
-  line-height: 1.45;
-}
-
-.readiness-next-steps strong {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 13px;
-}
-
-.readiness-next-steps ul {
-  margin: 0;
-  padding-left: 1.2rem;
-}
-
-.readiness-next-steps li {
-  margin-bottom: 4px;
-  font-size: 14px;
-  line-height: 1.4;
-}
-
-.readiness-buckets,
-.readiness-hint {
-  font-size: 13px;
-  line-height: 1.45;
-  margin: 8px 0 0;
-  color: var(--muted);
-}
-
-.readiness-tech {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--line);
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.readiness-tech code {
-  font-size: 12px;
-  word-break: break-all;
-}
-
-.readiness-json {
-  margin: 8px 0 0;
-  padding: 10px;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  font-size: 11px;
-  overflow: auto;
-  max-height: 220px;
 }
 
 .summary-hero {
@@ -1165,48 +1018,11 @@ code {
   font-weight: 700;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0;
 }
 
 .result-inline-label:first-child {
   margin-top: 4px;
-}
-
-.result-evidence-wrap {
-  padding: 0 18px 16px;
-  border-top: 1px solid var(--line);
-  background: var(--panel-soft);
-}
-
-.result-evidence-label {
-  margin: 12px 0 8px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--muted);
-}
-
-.summary-thumb-row {
-  display: flex;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.summary-thumb-row button {
-  width: 54px;
-  height: 42px;
-  min-height: 42px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-soft);
-  padding: 0;
-}
-
-.summary-thumb-row img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
 }
 
 .empty-state {
@@ -1220,10 +1036,15 @@ code {
   .focus-grid,
   .result-form,
   .case-form,
-  .evidence-gallery,
+  .ansible-check-grid,
   .summary-hero,
   .slide-grid,
   .summary-columns {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .csv-import-head,
+  .csv-map-row {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -1233,6 +1054,21 @@ code {
   }
 
   .fieldset-grid--4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tracker-form {
+    grid-template-columns: 1fr;
+  }
+
+  .status-fieldset,
+  .report-fieldset,
+  .manual-fieldset {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .ansible-check-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1248,11 +1084,16 @@ code {
   .focus-grid,
   .result-form,
   .case-form,
-  .evidence-gallery,
+  .ansible-check-grid,
   .case-heading,
   .summary-hero,
   .slide-grid,
   .summary-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .csv-import-head,
+  .csv-map-row {
     grid-template-columns: 1fr;
   }
 
@@ -1278,6 +1119,10 @@ code {
   }
 
   .fieldset-grid--4 {
+    grid-template-columns: 1fr;
+  }
+
+  .ansible-check-grid {
     grid-template-columns: 1fr;
   }
 }

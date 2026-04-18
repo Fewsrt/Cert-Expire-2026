@@ -1,4 +1,4 @@
-# Workflow: dev ↔ Ansible controller (Git) → Firebase
+# Workflow: dev ↔ Ansible controller (Git)
 
 ขั้นตอนนี้ใช้ **Git เป็นช่องทางหลัก** ระหว่างเครื่อง dev กับ controller (เช่น `root-215`) — ไม่ใช้ `scp`/`rsync` เป็นช่องทางหลักสำหรับโค้ดหรือ snapshot รายงานที่ตกลงจะ commit
 
@@ -48,16 +48,6 @@ git push origin main
 
 **Checklist ก่อน push:** ไม่มีรหัสผ่าน, key, หรือข้อมูลลับใน diff; ยอมรับได้หรือไม่หากมี hostname/IP ของลูกค้า
 
-## 4) บน dev — ดึง snapshot แล้ว sync ไป Firestore
+## 4) เปิด UI
 
-```bash
-cd /path/to/Cert-Expire-2026
-git pull
-node tools/sync-assessment-to-case-results.mjs ansible/reports/secureboot_ca_assessment.json
-```
-
-สคริปต์จะอ่าน `inventory-host-to-case-id.json`, รวมแถวต่อ test case, เติมฟิลด์ **`readinessV1`** ใน `vmCa2023Results/{caseId}` และเขียน `ansible/reports/firestore-sync-report.json` (ไฟล์นี้ยังถูก ignore — ใช้เฉพาะท้องถิ่น)
-
-## 5) เปิด UI
-
-เปิด `public/index.html` (หรือที่ deploy) — ใช้มุมมอง **ความพร้อม (ลูกค้า)** เพื่อดูสรุปจาก `readinessV1`
+เปิด `public/index.html` หรือหน้าเว็บที่ deploy ไว้

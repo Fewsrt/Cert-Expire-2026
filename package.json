@@ -9,11 +9,7 @@
   "scripts": {
     "dev:web": "npx http-server public -p 5173",
     "deploy:web": "npx firebase-tools deploy",
-    "test": "node --check public/app.js",
-    "present:html": "node tools/gen-html-present.js",
-    "push:firestore": "node tools/push-vmca2023-results.mjs",
-    "sync:firestore-cases": "node tools/sync-assessment-to-case-results.mjs",
-    "ansible:assess": "node tools/run-ansible-assessment.mjs"
+    "test": "node --check public/app.js"
   },
   "repository": {
     "type": "git",
@@ -26,12 +22,7 @@
     "url": "https://github.com/Fewsrt/Cert-Expire-2026/issues"
   },
   "homepage": "https://github.com/Fewsrt/Cert-Expire-2026#readme",
-  "dependencies": {
-    "pdfkit": "^0.17.2"
-  },
   "devDependencies": {
-    "dotenv": "^16.4.7",
-    "firebase-admin": "^13.8.0",
     "firebase-tools": "^15.15.0"
   }
 }

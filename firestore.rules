@@ -1,11 +1,6 @@
 rules_version = '2';
 
-// Collections: vmCa2023Cases (test definitions), vmCa2023Results (tracker + Ansible sync).
-//
-// Optional field readinessV1 on vmCa2023Results/{caseId} is written by
-// tools/sync-assessment-to-case-results.mjs (nested object, schemaVersion 1+).
-// The hosted UI reads readinessV1 when present and falls back to legacy fields
-// (status, notes, rootCause, ansibleAssessments) for older documents.
+// Collections: vmCa2023Cases (test definitions), vmCa2023Results (tracker + report rows).
 //
 // Production hardening: replace permissive rules below with Firebase Authentication
 // and least-privilege writes (e.g. only admin/service accounts for writes).

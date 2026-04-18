@@ -1,9 +1,6 @@
-import { renderCustomerReadinessView } from "./customer-readiness.js";
-
 const STORAGE_KEY = "vm-ca2023-results";
 const CONFIG_KEY = "vm-ca2023-firebase-config";
 const COLLECTION_NAME = "vmCa2023Results";
-const EVIDENCE_PATH = "vmCa2023Evidence";
 
 const statusLabels = {
   pending: "ยังไม่เริ่ม",
@@ -15,6 +12,20 @@ const statusLabels = {
 
 const CASES_COLLECTION_NAME = "vmCa2023Cases";
 const CASES_STORAGE_KEY = "vm-ca2023-cases";
+const REPORT_FIELDS = [
+  "inventory_host",
+  "os_family",
+  "esxi_version",
+  "secure_boot_enabled",
+  "db_has_2011",
+  "db_has_2023",
+  "kek_has_2023",
+  "dbx_readable",
+  "active_bootloader_file",
+  "active_bootloader_has_2011",
+  "active_bootloader_has_2023",
+  "active_bootloader_signature_method"
+];
 
 let cases = loadLocalCases();
 let editingCaseId = null;
@@ -24,17 +35,13 @@ let activeFilter = "all";
 let activeView = "tests";
 let searchTerm = "";
 let firebaseApi = null;
-let storageApi = null;
 let unsubscribe = null;
 let results = loadLocalResults();
-let activeImage = null;
-let imageZoom = 1;
+let csvRows = [];
 
 const elements = {
   testsView: document.querySelector("#tests-view"),
   summaryView: document.querySelector("#summary-view"),
-  readinessView: document.querySelector("#readiness-view"),
-  readinessPanel: document.querySelector("#readiness-panel"),
   list: document.querySelector("#case-list"),
   template: document.querySelector("#case-template"),
   total: document.querySelector("#metric-total"),
@@ -42,7 +49,6 @@ const elements = {
   fail: document.querySelector("#metric-fail"),
   impact: document.querySelector("#metric-impact"),
   sync: document.querySelector("#sync-state"),
-  setup: document.querySelector("#setup-panel"),
   caseForm: document.querySelector("#case-form"),
   caseFormMode: document.querySelector("#case-form-mode"),
   cancelCaseEdit: document.querySelector("#cancel-case-edit"),
@@ -50,6 +56,13 @@ const elements = {
   saveConfig: document.querySelector("#save-config"),
   clearConfig: document.querySelector("#clear-config"),
   search: document.querySelector("#search-input"),
+  csvInput: document.querySelector("#csv-input"),
+  csvImportDialog: document.querySelector("#csv-import-dialog"),
+  csvImportPanel: document.querySelector("#csv-import-panel"),
+  csvImportSummary: document.querySelector("#csv-import-summary"),
+  csvImportList: document.querySelector("#csv-import-list"),
+  saveCsvImport: document.querySelector("#save-csv-import"),
+  cancelCsvImport: document.querySelector("#cancel-csv-import"),
   exportJson: document.querySelector("#export-json"),
   resetLocal: document.querySelector("#reset-local"),
   resetAll: document.querySelector("#reset-all"),
@@ -61,15 +74,7 @@ const elements = {
   summaryImpact: document.querySelector("#summary-impact"),
   platformSummary: document.querySelector("#platform-summary"),
   keyFindings: document.querySelector("#key-findings"),
-  summaryCaseCards: document.querySelector("#summary-case-cards"),
-  imageModal: document.querySelector("#image-modal"),
-  modalImage: document.querySelector("#modal-image"),
-  modalCaption: document.querySelector("#modal-caption"),
-  closeImageModal: document.querySelector("#close-image-modal"),
-  zoomOutImage: document.querySelector("#zoom-out-image"),
-  zoomResetImage: document.querySelector("#zoom-reset-image"),
-  zoomInImage: document.querySelector("#zoom-in-image"),
-  downloadImage: document.querySelector("#download-image")
+  summaryCaseCards: document.querySelector("#summary-case-cards")
 };
 
 init();
@@ -104,29 +109,60 @@ function wireEvents() {
     render();
   });
 
-  elements.caseForm.addEventListener("submit", async (event) => {
+  elements.csvInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    await loadCsvFile(file);
+    event.target.value = "";
+  });
+
+  elements.saveCsvImport.addEventListener("click", async () => {
+    await saveCsvImport();
+  });
+
+  elements.cancelCsvImport.addEventListener("click", () => {
+    clearCsvImport();
+  });
+
+  elements.csvImportDialog.addEventListener("click", (event) => {
+    if (event.target === elements.csvImportDialog) clearCsvImport();
+  });
+  elements.csvImportDialog.addEventListener("cancel", (event) => {
     event.preventDefault();
-    await saveCaseFromForm();
+    clearCsvImport();
   });
 
-  elements.cancelCaseEdit.addEventListener("click", () => {
-    clearCaseForm();
-  });
+  if (elements.caseForm) {
+    elements.caseForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await saveCaseFromForm();
+    });
+  }
 
-  elements.saveConfig.addEventListener("click", () => {
-    try {
-      const value = JSON.parse(elements.configInput.value);
-      localStorage.setItem(CONFIG_KEY, JSON.stringify(value));
+  if (elements.cancelCaseEdit) {
+    elements.cancelCaseEdit.addEventListener("click", () => {
+      clearCaseForm();
+    });
+  }
+
+  if (elements.saveConfig) {
+    elements.saveConfig.addEventListener("click", () => {
+      try {
+        const value = JSON.parse(elements.configInput.value);
+        localStorage.setItem(CONFIG_KEY, JSON.stringify(value));
+        window.location.reload();
+      } catch (error) {
+        alert("Firebase config ต้องเป็น JSON ที่ถูกต้อง");
+      }
+    });
+  }
+
+  if (elements.clearConfig) {
+    elements.clearConfig.addEventListener("click", () => {
+      localStorage.removeItem(CONFIG_KEY);
       window.location.reload();
-    } catch (error) {
-      alert("Firebase config ต้องเป็น JSON ที่ถูกต้อง");
-    }
-  });
-
-  elements.clearConfig.addEventListener("click", () => {
-    localStorage.removeItem(CONFIG_KEY);
-    window.location.reload();
-  });
+    });
+  }
 
   elements.exportJson.addEventListener("click", () => {
     const payload = JSON.stringify(results, null, 2);
@@ -154,37 +190,17 @@ function wireEvents() {
     await resetAllResults();
   });
 
-  elements.closeImageModal.addEventListener("click", () => closeImageModal());
-  elements.imageModal.addEventListener("click", (event) => {
-    if (event.target === elements.imageModal) closeImageModal();
-  });
-  elements.zoomOutImage.addEventListener("click", () => setImageZoom(imageZoom - 0.25));
-  elements.zoomResetImage.addEventListener("click", () => setImageZoom(1));
-  elements.zoomInImage.addEventListener("click", () => setImageZoom(imageZoom + 0.25));
-  elements.downloadImage.addEventListener("click", () => {
-    if (activeImage) downloadImage(activeImage);
-  });
 }
 
 /**
- * Ansible sync writes ansibleAssessment / ansibleAssessments. Merge these back in when the user
- * saves the manual form so we do not strip them from memory, localStorage, or the next Firestore write.
+ * Keep report fields from Ansible when the user saves manual fields.
  */
 function pickPreservedAnsibleFields(previous) {
   if (!previous || typeof previous !== "object") return {};
   const out = {};
-  if (Array.isArray(previous.ansibleAssessments) && previous.ansibleAssessments.length) {
-    out.ansibleAssessments = previous.ansibleAssessments;
-  }
-  if (previous.ansibleAssessment && typeof previous.ansibleAssessment === "object") {
-    out.ansibleAssessment = previous.ansibleAssessment;
-  }
-  if (Array.isArray(previous.ansibleVmDetails) && previous.ansibleVmDetails.length) {
-    out.ansibleVmDetails = previous.ansibleVmDetails;
-  }
-  if (previous.readinessV1 && typeof previous.readinessV1 === "object") {
-    out.readinessV1 = previous.readinessV1;
-  }
+  REPORT_FIELDS.forEach((field) => {
+    if (Object.hasOwn(previous, field)) out[field] = previous[field];
+  });
   return out;
 }
 
@@ -206,7 +222,6 @@ function render() {
   }
   renderMetrics();
   renderSummary();
-  renderReadinessView();
   switchView();
 }
 
@@ -226,8 +241,6 @@ function renderCase(testCase) {
   const actions = document.createElement("div");
   actions.className = "case-actions";
   actions.appendChild(makeCaseActionButton("โหลด script รวม", "secondary", () => downloadCaseScript(testCase)));
-  actions.appendChild(makeCaseActionButton("Edit", "secondary", () => editCase(testCase)));
-  actions.appendChild(makeCaseActionButton("Delete case", "danger", () => deleteCase(testCase.id)));
   actions.appendChild(badge);
   heading.appendChild(actions);
 
@@ -256,7 +269,7 @@ function renderCase(testCase) {
     const field = form.elements[key];
     if (field && field.type !== "file") field.value = value || "";
   });
-  renderEvidenceGallery(fragment.querySelector(".evidence-gallery"), testCase.id, result.evidenceImages || []);
+  renderReportFields(fragment, result, testCase);
 
   fragment.querySelector(".updated-at").textContent = result.updatedAt
     ? `บันทึกล่าสุด: ${formatDate(result.updatedAt)}`
@@ -265,28 +278,15 @@ function renderCase(testCase) {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const formData = new FormData(form);
-    const files = Array.from(form.elements.evidenceImages.files || []);
-    const uploadedImages = await uploadEvidenceImages(testCase.id, files);
-    const existingImages = result.evidenceImages || [];
     const nextResult = {
       ...pickPreservedAnsibleFields(result),
       caseId: testCase.id,
       caseTitle: testCase.title,
       section: testCase.section,
       status: formData.get("status") || "pending",
-      vmName: formData.get("vmName") || "",
-      esxiBuild: formData.get("esxiBuild") || "",
-      owner: formData.get("owner") || "",
-      beforeCa: formData.get("beforeCa") || "",
-      beforeKek: formData.get("beforeKek") || "",
-      afterCa: formData.get("afterCa") || "",
-      afterKek: formData.get("afterKek") || "",
-      events: formData.get("events") || "",
-      impact: formData.get("impact") || "",
       rootCause: formData.get("rootCause") || "",
       actualRemediation: formData.get("actualRemediation") || "",
       notes: formData.get("notes") || "",
-      evidenceImages: [...existingImages, ...uploadedImages],
       updatedAt: new Date().toISOString()
     };
 
@@ -307,6 +307,273 @@ function makeCaseActionButton(label, className, onClick) {
   button.textContent = label;
   button.addEventListener("click", onClick);
   return button;
+}
+
+async function loadCsvFile(file) {
+  try {
+    const text = await file.text();
+    csvRows = parseCsv(text).map((row, index) => ({
+      index,
+      data: normalizeCsvReportRow(row),
+      selectedCaseId: guessCaseId(row),
+    }));
+    renderCsvImport();
+  } catch (error) {
+    console.error(error);
+    alert(`อ่าน CSV ไม่สำเร็จ: ${error.message}`);
+  }
+}
+
+function renderCsvImport() {
+  elements.csvImportList.innerHTML = "";
+  elements.csvImportPanel.hidden = csvRows.length === 0;
+  elements.csvImportSummary.textContent = `พบ ${csvRows.length} แถวจาก CSV`;
+  if (csvRows.length && !elements.csvImportDialog.open) {
+    elements.csvImportDialog.showModal();
+  }
+  if (!csvRows.length && elements.csvImportDialog.open) {
+    elements.csvImportDialog.close();
+  }
+
+  csvRows.forEach((item) => {
+    const row = document.createElement("article");
+    row.className = "csv-map-row";
+
+    const select = document.createElement("select");
+    select.innerHTML = [
+      "<option value=\"\">ไม่บันทึกแถวนี้</option>",
+      ...cases.map((testCase) => {
+        const selected = item.selectedCaseId === testCase.id ? " selected" : "";
+        return `<option value="${escapeHtml(testCase.id)}"${selected}>${escapeHtml(testCase.id)} · ${escapeHtml(testCase.title)}</option>`;
+      }),
+    ].join("");
+    select.addEventListener("change", () => {
+      item.selectedCaseId = select.value;
+    });
+
+    row.innerHTML = `
+      <div class="csv-cell csv-host">
+        <span>inventory_host</span>
+        <strong>${escapeHtml(item.data.inventory_host || "—")}</strong>
+      </div>
+      <div class="csv-cell">
+        <span>os_family</span>
+        <strong>${escapeHtml(formatOsFamily(item.data.os_family))}</strong>
+      </div>
+      <div class="csv-cell">
+        <span>ESXi version</span>
+        <strong>${escapeHtml(item.data.esxi_version || "—")}</strong>
+      </div>
+      <div class="csv-cell">
+        <span>Secure Boot</span>
+        <strong>${escapeHtml(formatBooleanThai(item.data.secure_boot_enabled, "secureBoot").label)}</strong>
+      </div>
+      <div class="csv-cell">
+        <span>DB 2011 / 2023</span>
+        <strong>${escapeHtml(formatBooleanThai(item.data.db_has_2011).label)} / ${escapeHtml(formatBooleanThai(item.data.db_has_2023).label)}</strong>
+      </div>
+      <div class="csv-cell">
+        <span>Bootloader 2011 / 2023</span>
+        <strong>${escapeHtml(formatBooleanThai(item.data.active_bootloader_has_2011).label)} / ${escapeHtml(formatBooleanThai(item.data.active_bootloader_has_2023).label)}</strong>
+      </div>
+      <label class="csv-case-select">
+        <span>Test case</span>
+      </label>
+    `;
+    row.querySelector(".csv-case-select").appendChild(select);
+    elements.csvImportList.appendChild(row);
+  });
+}
+
+async function saveCsvImport() {
+  const selected = csvRows.filter((item) => item.selectedCaseId);
+  if (!selected.length) {
+    alert("กรุณาเลือก test case อย่างน้อย 1 แถว");
+    return;
+  }
+
+  try {
+    setSync("กำลังบันทึก CSV ลง Firestore");
+    for (const item of selected) {
+      const current = results[item.selectedCaseId] || defaultResult();
+      const testCase = cases.find((caseItem) => caseItem.id === item.selectedCaseId);
+      const payload = {
+        ...defaultResult(),
+        ...item.data,
+        caseId: item.selectedCaseId,
+        caseTitle: testCase?.title || current.caseTitle || "",
+        section: testCase?.section || current.section || "",
+        rootCause: current.rootCause || "",
+        actualRemediation: current.actualRemediation || "",
+        notes: current.notes || "",
+        status: current.status || "pending",
+        updatedAt: new Date().toISOString(),
+      };
+      await saveResult(item.selectedCaseId, payload);
+      results[item.selectedCaseId] = payload;
+    }
+    saveLocalResults(results);
+    clearCsvImport();
+    render();
+    setSync(firebaseApi ? "บันทึก CSV แล้ว และ Firestore sync อัตโนมัติ" : "บันทึก CSV ใน local browser แล้ว");
+  } catch (error) {
+    console.error(error);
+    alert(`บันทึก CSV ไม่สำเร็จ: ${error.message}`);
+    setSync(`บันทึก CSV ไม่สำเร็จ: ${error.message}`);
+  }
+}
+
+function clearCsvImport() {
+  csvRows = [];
+  elements.csvImportList.innerHTML = "";
+  elements.csvImportPanel.hidden = true;
+  elements.csvImportSummary.textContent = "";
+  if (elements.csvImportDialog.open) elements.csvImportDialog.close();
+}
+
+function normalizeCsvReportRow(row) {
+  const out = {};
+  REPORT_FIELDS.forEach((field) => {
+    if (field === "esxi_version") {
+      out[field] = String(row.esxi_version ?? row.esxi ?? row.esxi_build ?? row.vmware_esxi_version ?? "").trim();
+      return;
+    }
+    out[field] = ["secure_boot_enabled", "db_has_2011", "db_has_2023", "kek_has_2023", "dbx_readable", "active_bootloader_has_2011", "active_bootloader_has_2023"].includes(field)
+      ? normalizeBooleanValue(row[field])
+      : String(row[field] ?? "").trim();
+  });
+  return out;
+}
+
+function guessCaseId(row) {
+  const explicitCaseId = String(row.caseId || row.case_id || row.testCaseId || row.test_case || "").trim();
+  if (cases.some((testCase) => testCase.id === explicitCaseId)) return explicitCaseId;
+  const host = String(row.inventory_host || "").trim();
+  if (cases.some((testCase) => testCase.id === host)) return host;
+  const hostLower = host.toLowerCase();
+  const matched = cases.find((testCase) => {
+    const haystack = [testCase.id, testCase.title, testCase.section, testCase.os, testCase.esxi].join(" ").toLowerCase();
+    return hostLower && haystack.includes(hostLower);
+  });
+  return matched?.id || "";
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let current = [];
+  let value = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === "\"") {
+      if (inQuotes && next === "\"") {
+        value += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === "," && !inQuotes) {
+      current.push(value);
+      value = "";
+    } else if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") index += 1;
+      current.push(value);
+      rows.push(current);
+      current = [];
+      value = "";
+    } else {
+      value += char;
+    }
+  }
+  current.push(value);
+  rows.push(current);
+
+  const [headerRow, ...dataRows] = rows.filter((row) => row.some((cell) => String(cell).trim()));
+  if (!headerRow) return [];
+  const headers = headerRow.map((header, index) => {
+    const text = String(header).trim();
+    return index === 0 ? text.replace(/^\uFEFF/, "") : text;
+  });
+  return dataRows.map((row) => {
+    const item = {};
+    headers.forEach((header, index) => {
+      item[header] = row[index] ?? "";
+    });
+    return item;
+  });
+}
+
+function renderReportFields(fragment, result, testCase) {
+  const report = getReportSource(result);
+  setReportText(fragment, "inventory_host", report.inventory_host || result.vmName || testCase.id);
+  setReportText(fragment, "os_family", formatOsFamily(report.os_family || testCase.os));
+  setReportText(fragment, "esxi_version", report.esxi_version || testCase.esxi);
+  setReportBool(fragment, "secure_boot_enabled", report.secure_boot_enabled, "secureBoot");
+  setReportBool(fragment, "db_has_2011", report.db_has_2011, "cert");
+  setReportBool(fragment, "db_has_2023", report.db_has_2023, "cert");
+  setReportBool(fragment, "kek_has_2023", report.kek_has_2023, "cert");
+  setReportBool(fragment, "dbx_readable", report.dbx_readable, "readable");
+  setReportText(fragment, "active_bootloader_file", report.active_bootloader_file);
+  setReportBool(fragment, "active_bootloader_has_2011", report.active_bootloader_has_2011, "cert");
+  setReportBool(fragment, "active_bootloader_has_2023", report.active_bootloader_has_2023, "cert");
+  setReportText(fragment, "active_bootloader_signature_method", report.active_bootloader_signature_method);
+}
+
+function getReportSource(result) {
+  return result || {};
+}
+
+function setReportText(fragment, field, value) {
+  const element = fragment.querySelector(`[data-report-field="${field}"]`);
+  if (!element) return;
+  element.textContent = value && String(value).trim() ? String(value) : "ยังไม่มีข้อมูล";
+  element.className = value && String(value).trim() ? "report-value" : "report-value empty";
+}
+
+function setReportBool(fragment, field, value, type) {
+  const element = fragment.querySelector(`[data-report-field="${field}"]`);
+  if (!element) return;
+  const display = formatBooleanThai(value, type);
+  element.textContent = display.label;
+  element.className = `report-value ${display.className}`;
+}
+
+function formatBooleanThai(value, type = "cert") {
+  const normalized = normalizeBooleanValue(value);
+  if (normalized === true) {
+    return {
+      label: type === "secureBoot" ? "เปิดใช้งาน" : type === "readable" ? "อ่านได้" : "พบ",
+      className: "true"
+    };
+  }
+  if (normalized === false) {
+    return {
+      label: type === "secureBoot" ? "ปิดอยู่" : type === "readable" ? "อ่านไม่ได้" : "ไม่พบ",
+      className: "false"
+    };
+  }
+  return {
+    label: "ยังไม่มีข้อมูล",
+    className: "empty"
+  };
+}
+
+function normalizeBooleanValue(value) {
+  if (value === true || value === false) return value;
+  const text = String(value ?? "").trim().toLowerCase();
+  if (["true", "yes", "y", "1", "on", "enabled"].includes(text)) return true;
+  if (["false", "no", "n", "0", "off", "disabled"].includes(text)) return false;
+  return "";
+}
+
+function formatOsFamily(value) {
+  const text = String(value || "").trim();
+  if (!text) return "ยังไม่มีข้อมูล";
+  if (/windows/i.test(text)) return "Windows";
+  if (/linux|ubuntu|rhel|sles|suse|rocky|alma|oracle/i.test(text)) return "Linux";
+  return text;
 }
 
 function getCaseCommands(testCase) {
@@ -618,108 +885,10 @@ function sortCases(list) {
   });
 }
 
-function renderEvidenceGallery(container, caseId, images) {
-  container.innerHTML = "";
-  if (!images.length) {
-    const empty = document.createElement("p");
-    empty.className = "empty-state";
-    empty.textContent = "ยังไม่มีรูป evidence";
-    container.appendChild(empty);
-    return;
-  }
-
-  images.forEach((image, index) => {
-    const item = document.createElement("div");
-    item.className = "evidence-item";
-    const preview = document.createElement("button");
-    preview.type = "button";
-    preview.className = "evidence-preview";
-    preview.title = image.name || "evidence";
-    preview.innerHTML = `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || "evidence image")}">`;
-    preview.addEventListener("click", () => openImageModal(image));
-
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "delete-image";
-    remove.textContent = "ลบรูป";
-    remove.addEventListener("click", async () => {
-      await deleteEvidenceImage(caseId, index);
-    });
-
-    const download = document.createElement("button");
-    download.type = "button";
-    download.className = "download-image";
-    download.textContent = "Download";
-    download.addEventListener("click", () => downloadImage(image));
-
-    item.appendChild(preview);
-    item.appendChild(download);
-    item.appendChild(remove);
-    container.appendChild(item);
-  });
-}
-
-function openImageModal(image) {
-  activeImage = image;
-  elements.modalImage.src = image.url;
-  elements.modalImage.alt = image.name || "evidence preview";
-  elements.modalCaption.textContent = `${image.name || "evidence"} · ${formatBytes(image.size || 0)} · ${image.source || "image"}`;
-  setImageZoom(1);
-  elements.imageModal.showModal();
-}
-
-function closeImageModal() {
-  elements.imageModal.close();
-  activeImage = null;
-  elements.modalImage.removeAttribute("src");
-  elements.modalCaption.textContent = "";
-  setImageZoom(1);
-}
-
-function setImageZoom(nextZoom) {
-  imageZoom = Math.min(4, Math.max(0.25, nextZoom));
-  elements.modalImage.style.width = `${imageZoom * 100}%`;
-  elements.zoomResetImage.textContent = `${Math.round(imageZoom * 100)}%`;
-}
-
-function downloadImage(image) {
-  const link = document.createElement("a");
-  link.href = image.url;
-  link.download = image.name || "evidence-image.jpg";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-}
-
-async function deleteEvidenceImage(caseId, index) {
-  const current = results[caseId] || defaultResult();
-  const images = [...(current.evidenceImages || [])];
-  images.splice(index, 1);
-  const nextResult = {
-    ...current,
-    caseId,
-    evidenceImages: images,
-    updatedAt: new Date().toISOString()
-  };
-  await saveResult(caseId, nextResult);
-  results[caseId] = nextResult;
-  saveLocalResults(results);
-  render();
-}
-
 function filterCases() {
   return cases.filter((testCase) => {
     const result = results[testCase.id] || defaultResult();
     const matchesFilter = activeFilter === "all" || result.status === activeFilter;
-    const ansibleHosts = getAnsibleAssessmentsList(result)
-      .map((r) => `${r.inventory_host || ""} ${r.host || ""} ${r.decision || ""}`)
-      .join(" ");
-    const ansibleVmText = getAnsibleVmDetailsList(result)
-      .map(
-        (r) =>
-          `${r.active_bootloader_file || ""} ${r.ca2023_alignment || ""} ${r.ca2023_summary || ""}`
-      )
-      .join(" ");
     const haystack = [
       testCase.id,
       testCase.section,
@@ -727,13 +896,14 @@ function filterCases() {
       testCase.purpose,
       testCase.os,
       testCase.esxi,
-      result.vmName,
-      result.owner,
+      result.inventory_host,
+      result.os_family,
+      result.esxi_version,
+      result.active_bootloader_file,
+      result.active_bootloader_signature_method,
       result.rootCause,
       result.notes,
-      result.events,
-      ansibleHosts,
-      ansibleVmText
+      result.actualRemediation
     ].join(" ").toLowerCase();
     return matchesFilter && (!searchTerm || haystack.includes(searchTerm));
   });
@@ -744,7 +914,7 @@ function renderMetrics() {
   elements.total.textContent = cases.length;
   elements.pass.textContent = allResults.filter((item) => item.status === "pass").length;
   elements.fail.textContent = allResults.filter((item) => item.status === "fail").length;
-  elements.impact.textContent = allResults.filter((item) => item.impact === "yes").length;
+  elements.impact.textContent = allResults.filter((item) => normalizeBooleanValue(getReportSource(item).active_bootloader_has_2023) === true).length;
 }
 
 function renderSummary() {
@@ -752,25 +922,25 @@ function renderSummary() {
   const completed = allResults.filter((item) => item.status !== "pending").length;
   const pass = allResults.filter((item) => item.status === "pass").length;
   const fail = allResults.filter((item) => item.status === "fail").length;
-  const impact = allResults.filter((item) => item.impact === "yes").length;
+  const bootloader2023 = allResults.filter((item) => normalizeBooleanValue(getReportSource(item).active_bootloader_has_2023) === true).length;
   const percent = cases.length ? Math.round((completed / cases.length) * 100) : 0;
 
   elements.summaryPercent.textContent = `${percent}%`;
   elements.summaryCoverage.textContent = `${completed} / ${cases.length}`;
   elements.summaryPass.textContent = pass;
   elements.summaryFail.textContent = fail;
-  elements.summaryImpact.textContent = impact;
-  elements.summaryHeadline.textContent = buildSummaryHeadline(completed, pass, fail, impact);
+  elements.summaryImpact.textContent = bootloader2023;
+  elements.summaryHeadline.textContent = buildSummaryHeadline(completed, pass, fail);
 
   renderPlatformSummary();
-  renderKeyFindings({ completed, pass, fail, impact });
+  renderKeyFindings({ completed, pass, fail, bootloader2023 });
   renderSummaryCards();
 }
 
-function buildSummaryHeadline(completed, pass, fail, impact) {
+function buildSummaryHeadline(completed, pass, fail) {
   if (!completed) return "ยังไม่มีผลทดสอบที่บันทึก เริ่มจากชุด minimum test ก่อนเพื่อเห็น risk เร็วที่สุด";
-  if (fail || impact) return `บันทึกผลแล้ว ${completed} test case พบ fail ${fail} รายการ และ impact ${impact} รายการที่ต้องติดตาม remediation`;
-  return `บันทึกผลแล้ว ${completed} test case ยังไม่พบ impact จากชุดที่ทดสอบ`;
+  if (fail) return `บันทึกผลแล้ว ${completed} test case พบ fail ${fail} รายการ`;
+  return `บันทึกผลแล้ว ${completed} test case`;
 }
 
 function renderPlatformSummary() {
@@ -778,12 +948,12 @@ function renderPlatformSummary() {
   cases.forEach((testCase) => {
     const result = results[testCase.id] || defaultResult();
     const key = testCase.section;
-    const item = groups.get(key) || { total: 0, done: 0, pass: 0, fail: 0, impact: 0 };
+    const item = groups.get(key) || { total: 0, done: 0, pass: 0, fail: 0, bootloader2023: 0 };
     item.total += 1;
     if (result.status !== "pending") item.done += 1;
     if (result.status === "pass") item.pass += 1;
     if (result.status === "fail") item.fail += 1;
-    if (result.impact === "yes") item.impact += 1;
+    if (normalizeBooleanValue(getReportSource(result).active_bootloader_has_2023) === true) item.bootloader2023 += 1;
     groups.set(key, item);
   });
 
@@ -794,7 +964,7 @@ function renderPlatformSummary() {
     row.className = "platform-row";
     row.innerHTML = `
       <span class="platform-name">${escapeHtml(name)}</span>
-      <span>${item.done}/${item.total} done · ${item.pass} pass · ${item.fail} fail · ${item.impact} impact</span>
+      <span>${item.done}/${item.total} done · ${item.pass} pass · ${item.fail} fail · ${item.bootloader2023} bootloader CA 2023</span>
       <div class="platform-bar"><span style="width: ${percent}%"></span></div>
     `;
     elements.platformSummary.appendChild(row);
@@ -814,8 +984,7 @@ function renderKeyFindings(summary) {
     findings.push(`ความคืบหน้ารวม ${summary.completed}/${cases.length} test cases`);
     findings.push(`ผ่านแล้ว ${summary.pass} test cases`);
     if (summary.fail) findings.push(`มี fail ${summary.fail} test cases ต้องทำ remediation และ retest`);
-    if (summary.impact) findings.push(`มี impact ${summary.impact} test cases ต้องติดตาม owner/root cause`);
-    if (!summary.fail && !summary.impact) findings.push("ยังไม่พบ impact จากผลที่บันทึกไว้");
+    findings.push(`Bootloader พบ CA 2023 แล้ว ${summary.bootloader2023} test cases`);
   }
 
   const pendingTopCases = cases
@@ -832,40 +1001,6 @@ function renderKeyFindings(summary) {
   });
 }
 
-/** Prefer top-level ansibleVmDetails[] from Firestore; else derive from ansibleAssessments. */
-function getAnsibleVmDetailsList(result) {
-  if (Array.isArray(result.ansibleVmDetails) && result.ansibleVmDetails.length) {
-    return result.ansibleVmDetails.map(normalizeVmDetailRow);
-  }
-  return getAnsibleAssessmentsList(result).map(vmDetailFromAssessment);
-}
-
-function vmDetailFromAssessment(r) {
-  return normalizeVmDetailRow({
-    inventory_host: r.inventory_host || r.host,
-    active_bootloader_file: r.active_bootloader_file,
-    active_bootloader_has_2011: r.active_bootloader_has_2011,
-    active_bootloader_has_2023: r.active_bootloader_has_2023,
-    ca2023_alignment: r.ca2023_alignment,
-    ca2023_summary: r.ca2023_summary
-  });
-}
-
-function normalizeVmDetailRow(row) {
-  const host = String(row.inventory_host || "").trim();
-  const file = row.active_bootloader_file != null ? String(row.active_bootloader_file).trim() : "";
-  const align = row.ca2023_alignment != null ? String(row.ca2023_alignment).trim() : "";
-  const summ = row.ca2023_summary != null ? String(row.ca2023_summary).trim() : "";
-  return {
-    inventory_host: host || "—",
-    active_bootloader_file: file || "—",
-    active_bootloader_has_2011: !!row.active_bootloader_has_2011,
-    active_bootloader_has_2023: !!row.active_bootloader_has_2023,
-    ca2023_alignment: align || "—",
-    ca2023_summary: summ || "—"
-  };
-}
-
 function renderSummaryCards() {
   const orderedCases = [...cases].sort((a, b) => {
     const aResult = results[a.id] || defaultResult();
@@ -876,9 +1011,10 @@ function renderSummaryCards() {
   elements.summaryCaseCards.innerHTML = "";
   orderedCases.forEach((testCase) => {
     const result = results[testCase.id] || defaultResult();
+    const report = getReportSource(result);
     const card = document.createElement("article");
     card.className = "result-summary-card";
-    const badgeClass = result.impact === "yes" ? "impact" : result.status;
+    const badgeClass = result.status;
 
     card.innerHTML = `
       <header class="result-card-head">
@@ -889,23 +1025,23 @@ function renderSummaryCards() {
         <span class="badge ${escapeHtml(badgeClass || "pending")}">${escapeHtml(statusLabels[result.status] || statusLabels.pending)}</span>
       </header>
       <div class="result-chip-strip" aria-label="สรุปผลหลัก">
-        ${resultChipHtml("ก่อน CA 2023", formatTriStateDisplay(result.beforeCa))}
-        ${resultChipHtml("ก่อน KEK 2023", formatTriStateDisplay(result.beforeKek))}
-        ${resultChipHtml("หลัง CA", formatTriStateDisplay(result.afterCa))}
-        ${resultChipHtml("หลัง KEK", formatTriStateDisplay(result.afterKek))}
-        ${resultChipHtml("Impact", formatImpactDisplay(result.impact))}
+        ${resultChipHtml("Secure Boot", formatBooleanThai(report.secure_boot_enabled, "secureBoot").label)}
+        ${resultChipHtml("DB CA 2011", formatBooleanThai(report.db_has_2011, "cert").label)}
+        ${resultChipHtml("DB CA 2023", formatBooleanThai(report.db_has_2023, "cert").label)}
+        ${resultChipHtml("KEK CA 2023", formatBooleanThai(report.kek_has_2023, "cert").label)}
+        ${resultChipHtml("DBX", formatBooleanThai(report.dbx_readable, "readable").label)}
+        ${resultChipHtml("Bootloader CA 2011", formatBooleanThai(report.active_bootloader_has_2011, "cert").label)}
+        ${resultChipHtml("Bootloader CA 2023", formatBooleanThai(report.active_bootloader_has_2023, "cert").label)}
       </div>
       <dl class="result-kv-grid">
-        ${resultKvRow("VM", result.vmName)}
-        ${resultKvRow("ESXi build", result.esxiBuild)}
-        ${resultKvRow("Owner", result.owner)}
+        ${resultKvRow("inventory_host", report.inventory_host || result.vmName)}
+        ${resultKvRow("os_family", formatOsFamily(report.os_family || testCase.os))}
+        ${resultKvRow("esxi_version", report.esxi_version || testCase.esxi)}
+        ${resultKvRow("active_bootloader_file", report.active_bootloader_file)}
+        ${resultKvRow("active_bootloader_signature_method", report.active_bootloader_signature_method)}
         ${resultKvRow("อัปเดตล่าสุด", result.updatedAt ? formatDate(result.updatedAt) : "")}
       </dl>
       <div class="result-details-stack">
-        <details class="result-block">
-          <summary>เหตุการณ์ / Event log</summary>
-          <pre class="result-pre">${blockText(result.events)}</pre>
-        </details>
         <details class="result-block">
           <summary>สาเหตุ &amp; Remediation ที่ใช้จริง</summary>
           <div class="result-subblocks">
@@ -922,57 +1058,8 @@ function renderSummaryCards() {
       </div>
     `;
 
-    const images = (result.evidenceImages || []).slice(0, 8);
-    if (images.length) {
-      const wrap = document.createElement("div");
-      wrap.className = "result-evidence-wrap";
-      const label = document.createElement("p");
-      label.className = "result-evidence-label";
-      label.textContent = "Evidence images";
-      const row = document.createElement("div");
-      row.className = "summary-thumb-row";
-      images.forEach((image) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.title = image.name || "evidence";
-        button.innerHTML = `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || "evidence image")}">`;
-        button.addEventListener("click", () => openImageModal(image));
-        row.appendChild(button);
-      });
-      wrap.appendChild(label);
-      wrap.appendChild(row);
-      card.appendChild(wrap);
-    }
-
     elements.summaryCaseCards.appendChild(card);
   });
-}
-
-function getAnsibleAssessmentsList(result) {
-  if (Array.isArray(result.ansibleAssessments) && result.ansibleAssessments.length) {
-    return result.ansibleAssessments;
-  }
-  if (result.ansibleAssessment && typeof result.ansibleAssessment === "object") {
-    return [result.ansibleAssessment];
-  }
-  return [];
-}
-
-function formatTriStateDisplay(value) {
-  const v = value === true ? "true" : value === false ? "false" : String(value ?? "").trim();
-  const map = {
-    true: "มี (True)",
-    false: "ไม่มี (False)",
-    na: "N/A",
-    "": "—"
-  };
-  return map[v] ?? (v ? v : "—");
-}
-
-function formatImpactDisplay(value) {
-  if (value === "yes") return "Yes — มีผลกระทบ";
-  if (value === "no") return "No";
-  return "ยังไม่สรุป";
 }
 
 function resultChipHtml(label, value) {
@@ -990,7 +1077,6 @@ function blockText(value) {
 }
 
 function statusWeight(result) {
-  if (result.impact === "yes") return 0;
   if (result.status === "fail") return 1;
   if (result.status === "in-progress") return 2;
   if (result.status === "exception") return 3;
@@ -1002,24 +1088,15 @@ function getAllResults() {
   return cases.map((testCase) => results[testCase.id] || defaultResult());
 }
 
-function renderReadinessView() {
-  if (!elements.readinessPanel) return;
-  renderCustomerReadinessView(elements.readinessPanel, cases, results);
-}
-
 function switchView() {
   elements.testsView.classList.toggle("active-view", activeView === "tests");
   elements.summaryView.classList.toggle("active-view", activeView === "summary");
-  if (elements.readinessView) {
-    elements.readinessView.classList.toggle("active-view", activeView === "readiness");
-  }
 }
 
 async function connectFirebase() {
   const config = getFirebaseConfig();
   if (!config) {
     setSync("ยังไม่ได้เชื่อม Firebase, กำลังเก็บใน local browser");
-    elements.setup.open = true;
     return;
   }
 
@@ -1034,7 +1111,6 @@ async function connectFirebase() {
     const db = getFirestore(app);
 
     firebaseApi = { db, collection, doc, onSnapshot, setDoc, deleteDoc, serverTimestamp };
-    await connectStorageIfEnabled(app, config);
     subscribeToCases();
     subscribeToResults();
   } catch (error) {
@@ -1059,165 +1135,6 @@ function subscribeToCases() {
   }, (error) => {
     console.error(error);
     setSync(`Cases sync error: ${error.message}`);
-  });
-}
-
-async function connectStorageIfEnabled(app, config) {
-  storageApi = null;
-  if (!config.enableStorage || !config.storageBucket) return;
-
-  try {
-    const { getStorage, ref, uploadBytes, getDownloadURL } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js");
-    const storage = getStorage(app, `gs://${config.storageBucket}`);
-    storageApi = { storage, ref, uploadBytes, getDownloadURL };
-  } catch (error) {
-    console.warn("Firebase Storage is disabled; using Firestore inline image fallback.", error);
-    storageApi = null;
-  }
-}
-
-async function uploadEvidenceImages(caseId, files) {
-  if (!files.length) return [];
-  if (!storageApi) {
-    return filesToInlineEvidence(files, "Firebase Storage ยังไม่พร้อม ใช้ Firestore inline fallback");
-  }
-
-  const uploaded = [];
-  for (const file of files) {
-    if (!file.type.startsWith("image/")) {
-      alert(`ข้ามไฟล์ ${file.name}: รองรับเฉพาะรูปภาพ`);
-      continue;
-    }
-    const prepared = await compressImageFile(file);
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const path = `${EVIDENCE_PATH}/${caseId}/${Date.now()}-${safeName}`;
-    try {
-      const fileRef = storageApi.ref(storageApi.storage, path);
-      await storageApi.uploadBytes(fileRef, prepared.blob, {
-        contentType: prepared.contentType,
-        customMetadata: { caseId }
-      });
-      const url = await storageApi.getDownloadURL(fileRef);
-      uploaded.push({
-        name: file.name,
-        path,
-        url,
-        contentType: prepared.contentType,
-        originalSize: file.size,
-        size: prepared.blob.size,
-        source: "firebase-storage",
-        uploadedAt: new Date().toISOString()
-      });
-    } catch (error) {
-      console.warn("Storage upload failed; using Firestore inline fallback.", error);
-      const fallback = await fileToInlineEvidence(file, "Storage upload failed");
-      if (fallback) uploaded.push(fallback);
-    }
-  }
-  return uploaded;
-}
-
-async function filesToInlineEvidence(files, reason) {
-  const uploaded = [];
-  for (const file of files) {
-    const fallback = await fileToInlineEvidence(file, reason);
-    if (fallback) uploaded.push(fallback);
-  }
-  return uploaded;
-}
-
-function fileToInlineEvidence(file, reason) {
-  return new Promise(async (resolve) => {
-    if (!file.type.startsWith("image/")) {
-      alert(`ข้ามไฟล์ ${file.name}: รองรับเฉพาะรูปภาพ`);
-      resolve(null);
-      return;
-    }
-    const prepared = await compressImageFile(file, { maxBytes: 420 * 1024 });
-    const reader = new FileReader();
-    reader.onload = () => {
-      resolve({
-        name: file.name,
-        path: "",
-        url: reader.result,
-        contentType: prepared.contentType,
-        originalSize: file.size,
-        size: prepared.blob.size,
-        source: "firestore-inline",
-        note: reason,
-        uploadedAt: new Date().toISOString()
-      });
-    };
-    reader.onerror = () => {
-      alert(`อ่านไฟล์ ${file.name} ไม่สำเร็จ`);
-      resolve(null);
-    };
-    reader.readAsDataURL(prepared.blob);
-  });
-}
-
-async function compressImageFile(file, options = {}) {
-  const maxBytes = options.maxBytes || 650 * 1024;
-  const image = await loadImage(file);
-  let maxDimension = options.maxDimension || 1600;
-  let quality = 0.82;
-  let blob = null;
-
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    const { canvas } = drawImageToCanvas(image, maxDimension);
-    blob = await canvasToBlob(canvas, "image/jpeg", quality);
-    if (blob.size <= maxBytes) break;
-    if (quality > 0.45) {
-      quality -= 0.12;
-    } else {
-      maxDimension = Math.max(720, Math.floor(maxDimension * 0.78));
-      quality = 0.72;
-    }
-  }
-
-  return {
-    blob,
-    contentType: "image/jpeg"
-  };
-}
-
-function loadImage(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(image);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error(`Cannot load image ${file.name}`));
-    };
-    image.src = url;
-  });
-}
-
-function drawImageToCanvas(image, maxDimension) {
-  const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
-  const width = Math.max(1, Math.round(image.naturalWidth * scale));
-  const height = Math.max(1, Math.round(image.naturalHeight * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  context.drawImage(image, 0, 0, width, height);
-  return { canvas, width, height };
-}
-
-function canvasToBlob(canvas, type, quality) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        reject(new Error("Image compression failed"));
-        return;
-      }
-      resolve(blob);
-    }, type, quality);
   });
 }
 
@@ -1248,7 +1165,7 @@ async function saveResult(caseId, payload) {
     ...payload,
     updatedAt: firebaseApi.serverTimestamp(),
     updatedAtIso: payload.updatedAt
-  }, { merge: true });
+  });
 }
 
 async function resetAllResults() {
@@ -1306,7 +1223,7 @@ function getFirebaseConfig() {
   if (!localConfig) return null;
   try {
     const config = JSON.parse(localConfig);
-    elements.configInput.value = JSON.stringify(config, null, 2);
+    if (elements.configInput) elements.configInput.value = JSON.stringify(config, null, 2);
     return config.projectId ? config : null;
   } catch {
     return null;
@@ -1316,20 +1233,21 @@ function getFirebaseConfig() {
 function defaultResult() {
   return {
     status: "pending",
-    vmName: "",
-    esxiBuild: "",
-    owner: "",
-    beforeCa: "",
-    beforeKek: "",
-    afterCa: "",
-    afterKek: "",
-    events: "",
-    impact: "",
+    inventory_host: "",
+    os_family: "",
+    esxi_version: "",
+    secure_boot_enabled: "",
+    db_has_2011: "",
+    db_has_2023: "",
+    kek_has_2023: "",
+    dbx_readable: "",
+    active_bootloader_file: "",
+    active_bootloader_has_2011: "",
+    active_bootloader_has_2023: "",
+    active_bootloader_signature_method: "",
     rootCause: "",
     actualRemediation: "",
     notes: "",
-    evidenceImages: [],
-    ansibleVmDetails: [],
     updatedAt: ""
   };
 }
@@ -2012,12 +1930,6 @@ function formatDate(value) {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(date);
-}
-
-function formatBytes(bytes) {
-  if (!bytes) return "0 KB";
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function escapeHtml(value) {
