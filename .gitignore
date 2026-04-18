@@ -7,3 +7,7 @@ __pycache__/
 
 # Local govc / API dumps (environment-specific)
 ansible/inventory/test.json
+
+# Local Ansible / lab secrets
+ansible/playbooks/.env
+.env
