@@ -7,8 +7,13 @@
 #   foreman-maintain packages install python3-pip
 # If still blocked, ask the platform team to allow python3-pip or install pywinrm on the controller image.
 #
-# Then:
+# Then (or use ./install_controller_deps.sh so pip targets Ansible’s Python):
 #   cd ansible && python3 -m pip install -r controller-pip-requirements.txt
+#
+# If Ansible still says "No module named 'winrm'", pip installed to a different Python than
+# ansible-playbook (common on RHEL: platform-python vs python3). Run:
+#   cd ansible && chmod +x install_controller_deps.sh && ./install_controller_deps.sh
+# Or manually: /usr/libexec/platform-python -m pip install -r controller-pip-requirements.txt
 #
 # No pip at all — try bootstrap (if allowed):
 #   python3 -m ensurepip --user
