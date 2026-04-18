@@ -120,10 +120,20 @@ def build_inventory(csv_path: Path, check_column: str) -> dict[str, object]:
 
 
 def main() -> int:
+    # Default CSV path is next to the ansible/ tree (…/ansible/samples/…) so it works no matter
+    # whether the shell cwd is repo root, ansible/, or inventory/ (relative paths like
+    # "ansible/samples/..." would otherwise point at the wrong file and yield an empty inventory).
+    ansible_dir = Path(__file__).resolve().parent.parent
+    default_sample_csv = ansible_dir / "samples" / "vcenter_targets.csv"
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--list", action="store_true", help="Emit full inventory JSON")
     parser.add_argument("--host", help="Emit hostvars for one host")
-    parser.add_argument("--csv", default=os.environ.get("VCENTER_CSV", "ansible/samples/vcenter_targets.csv"))
+    parser.add_argument(
+        "--csv",
+        default=os.environ.get("VCENTER_CSV") or str(default_sample_csv),
+        help="Path to vCenter/PowerCLI CSV (default: $VCENTER_CSV if set, else ansible/samples/vcenter_targets.csv next to this repo layout)",
+    )
     parser.add_argument("--check-column", default=os.environ.get("VCENTER_CHECK_COLUMN", "check"))
     args = parser.parse_args()
 
