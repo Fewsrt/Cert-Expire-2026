@@ -215,6 +215,30 @@
           mountvol $espDrive /D | Out-Null
           }
 
+          $bl2023 = [bool]$bootloaderSummary.has_2023
+          $bl2011 = [bool]$bootloaderSummary.has_2011
+          $ca2023Alignment = ""
+          $ca2023Summary = ""
+          if (-not $secureBoot) {
+          $ca2023Alignment = "SECUREBOOT_OFF_OR_UNKNOWN"
+          $ca2023Summary = "Secure Boot off or not confirmed; CA 2023 rollout state not assessed from this host."
+          } elseif (-not $kekHas2023 -or -not $dbHas2023) {
+          $ca2023Alignment = "FIRMWARE_MISSING_CA2023"
+          $ca2023Summary = "KEK and/or db does not yet show Microsoft UEFI CA 2023 as required; patch and Secure-Boot-Update before the platform is 2023-ready in NVRAM."
+          } elseif (-not $bootloaderSummary.exists) {
+          $ca2023Alignment = "ACTIVE_BOOTLOADER_UNRESOLVED"
+          $ca2023Summary = "NVRAM may be progressing but bootmgfw.efi was not found for signature inspection; verify ESP mount and boot entry."
+          } elseif ($bl2023) {
+          $ca2023Alignment = "ALIGNED_FW_AND_BOOTLOADER_SHOW_2023"
+          $ca2023Summary = "KEK+db include CA 2023 and the active bootmgfw authenticode chain references 2023 (aligned)."
+          } elseif ($bl2011 -and -not $bl2023) {
+          $ca2023Alignment = "STANDBY_FW_HAS_2023_BOOTLOADER_CHAIN_2011_ONLY"
+          $ca2023Summary = "NVRAM already contains Microsoft CA 2023 in KEK+db but bootmgfw chain still shows 2011 anchors only; common mid-transition—finish cumulative updates and Secure-Boot-Update with reboots; not the same risk as missing firmware CA 2023."
+          } else {
+          $ca2023Alignment = "BOOTLOADER_CHAIN_UNCLEAR"
+          $ca2023Summary = "Firmware variables include CA 2023 but bootloader signature classification is unclear; review authenticode chain manually."
+          }
+
           [PSCustomObject]@{
           host = $env:COMPUTERNAME
           os_family = "windows"
@@ -227,6 +251,8 @@
           active_bootloader_source = $(if ($bootloaderSummary.path -match "^[A-Z]:\\EFI\\Microsoft\\Boot") { "ESP" } else { "OS_FALLBACK" })
           active_bootloader_has_2011 = [bool]$bootloaderSummary.has_2011
           active_bootloader_has_2023 = [bool]$bootloaderSummary.has_2023
+          ca2023_alignment = $ca2023Alignment
+          ca2023_summary = $ca2023Summary
           bootloader_signature_status = [string]$bootloaderSummary.signature_status
           bootloader_chain = $bootloaderSummary.chain
           variables = $vars
@@ -296,25 +322,67 @@
                 "summary": "\\n".join(line for line in text.splitlines() if _mokutil_summary_line(line))[:12000],
             }
 
-          def active_efi_from_efibootmgr(text):
-            current = ""
+          def _boot_current_hex(text):
             for line in text.splitlines():
-                if line.startswith("BootCurrent:"):
-                    current = line.split(":", 1)[1].strip()
-                    break
+                ls = line.strip()
+                if ls.lower().startswith("bootcurrent:"):
+                    val = ls.split(":", 1)[1].strip()
+                    if not val:
+                        return ""
+                    if val.lower().startswith("0x"):
+                        val = val[2:]
+                    try:
+                        num = int(val, 16)
+                    except ValueError:
+                        try:
+                            num = int(val, 10)
+                        except ValueError:
+                            return ""
+                    return f"{num:04X}"
+            return ""
+
+          def _host_path_from_boot_description(desc):
+            if not desc:
+                return ""
+            m = re.search(r"File\\(([^)]+)\\)", desc, re.I)
+            inner = m.group(1).strip() if m else ""
+            if not inner:
+                m2 = re.search(r"(?:\\\\|/)EFI(?:\\\\|/).+?\\.efi", desc, re.I)
+                inner = m2.group(0) if m2 else ""
+            if not inner:
+                return ""
+            inner = inner.replace(chr(92), "/")
+            if not inner.startswith("/"):
+                inner = "/" + inner.lstrip("/")
+            if inner.upper().startswith("/EFI"):
+                return "/boot/efi" + inner
+            if inner.upper().startswith("EFI/"):
+                return "/boot/efi/" + inner
+            return ""
+
+          def active_efi_from_efibootmgr(text):
+            current = _boot_current_hex(text)
             if not current:
                 return "", ""
-            pattern = re.compile(rf"^Boot{re.escape(current)}\\*?\\s+(.+)$")
+            line_pat = re.compile(rf"^Boot{current}\\*?\\s+(.*)$", re.I)
             for line in text.splitlines():
-                match = pattern.match(line)
-                if not match:
+                ls = line.strip()
+                m = line_pat.match(ls)
+                if not m:
                     continue
-                raw = match.group(1)
-                path_match = re.search(r"(\\\\EFI\\\\.+?\\.efi)", raw, re.I)
-                if not path_match:
-                    continue
-                efi_path = path_match.group(1).replace("\\\\", "/")
-                return f"/boot/efi{efi_path}", raw
+                desc = m.group(1)
+                host_path = _host_path_from_boot_description(desc)
+                if host_path:
+                    return host_path, desc
+            return "", ""
+
+          def fallback_efi_bootloader():
+            sh = sorted({p for p in glob.glob("/boot/efi/EFI/*/shimx64.efi") + glob.glob("/boot/efi/EFI/*/shim.efi") if os.path.isfile(p)})
+            if len(sh) == 1:
+                return sh[0], "fallback:single_shim_on_esp"
+            gr = sorted({p for p in glob.glob("/boot/efi/EFI/*/grubx64.efi") if os.path.isfile(p)})
+            if not sh and len(gr) == 1:
+                return gr[0], "fallback:single_grub_on_esp"
             return "", ""
 
           def package_owner(path):
@@ -343,6 +411,8 @@
           sb_state = run("mokutil --sb-state 2>&1")
           efibootmgr = run("efibootmgr -v 2>&1")
           active_file, active_raw = active_efi_from_efibootmgr(efibootmgr)
+          if not active_file:
+            active_file, active_raw = fallback_efi_bootloader()
           efi_files = sorted(glob.glob("/boot/efi/EFI/**/*.efi", recursive=True))
           active_sig = signature(active_file)
           variables = {name: sb_var(name) for name in ["pk", "kek", "db", "dbx"]}
@@ -387,6 +457,38 @@
             root_cause = "Active EFI bootloader signature shows 2011 CA only"
             fix = "Update vendor shim/GRUB/kernel packages from supported repos, reboot twice, rerun assessment."
 
+          bl2023 = bool(active_sig["has_2023"])
+          bl2011 = bool(active_sig["has_2011"])
+          ca2023_alignment = ""
+          ca2023_summary = ""
+          if not secure_boot_enabled:
+            ca2023_alignment = "SECUREBOOT_OFF_OR_UNKNOWN"
+            ca2023_summary = "Secure Boot off or not confirmed; CA 2023 rollout state not assessed from this host."
+          elif not db_has_2023 or not kek["has_kek_2023"]:
+            ca2023_alignment = "FIRMWARE_MISSING_CA2023"
+            ca2023_summary = "mokutil KEK/db does not yet show Microsoft UEFI CA 2023 as required; update firmware policy or packages before the platform is 2023-ready in NVRAM."
+          elif not active_file:
+            ca2023_alignment = "ACTIVE_BOOTLOADER_UNRESOLVED"
+            ca2023_summary = "NVRAM may be progressing but the active EFI bootloader path was not resolved; verify efibootmgr and ESP mount."
+          elif active_file and not os.path.exists(active_file):
+            ca2023_alignment = "ACTIVE_BOOTLOADER_PATH_MISSING"
+            ca2023_summary = "Bootloader path from efibootmgr does not exist on disk; repair EFI entries before interpreting CA 2023 vs bootloader."
+          elif active_file and not owner:
+            ca2023_alignment = "BOOTLOADER_NOT_FROM_OS_PACKAGE"
+            ca2023_summary = "KEK+db may show CA 2023 but the active EFI file is not owned by an OS package; remediate before trusting bootloader chain evidence."
+          elif active_sig["text"] == "sbverify not installed":
+            ca2023_alignment = "EVIDENCE_NEEDS_SBVERIFY"
+            ca2023_summary = "Install sbsigntools (sbverify) to classify whether the active shim/GRUB chain shows 2011-only or 2023; firmware may already have CA 2023."
+          elif bl2023:
+            ca2023_alignment = "ALIGNED_FW_AND_BOOTLOADER_SHOW_2023"
+            ca2023_summary = "KEK+db include CA 2023 and sbverify on the active bootloader references 2023 (aligned)."
+          elif bl2011 and not bl2023:
+            ca2023_alignment = "STANDBY_FW_HAS_2023_BOOTLOADER_CHAIN_2011_ONLY"
+            ca2023_summary = "mokutil shows Microsoft CA 2023 in KEK+db but the active EFI binary chain still shows 2011 anchors only; typical mid-transition—update shim/GRUB and reboot; not the same as missing firmware CA 2023."
+          else:
+            ca2023_alignment = "BOOTLOADER_CHAIN_UNCLEAR"
+            ca2023_summary = "Firmware variables include CA 2023 but bootloader signature classification is unclear; review sbverify output manually."
+
           print(json.dumps({
             "host": os.uname().nodename,
             "os_family": "linux",
@@ -401,6 +503,8 @@
             "active_bootloader_owner": owner,
             "active_bootloader_has_2011": bool(active_sig["has_2011"]),
             "active_bootloader_has_2023": bool(active_sig["has_2023"]),
+            "ca2023_alignment": ca2023_alignment,
+            "ca2023_summary": ca2023_summary,
             "active_bootloader_signature_text": active_sig["text"],
             "efi_files": efi_files,
             "package_versions": package_versions,
@@ -451,11 +555,11 @@
         dest: "{{ report_csv }}"
         mode: "0644"
         content: |
-          inventory_host,os_family,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,decision,root_cause,fix
+          inventory_host,os_family,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,ca2023_alignment,ca2023_summary,decision,root_cause,fix
           {% for host in groups['all'] | difference(['localhost']) | sort %}
           {% set a = hostvars[host].secureboot_assessment | default({}) %}
           {% if a %}
-          {{ host }},{{ a.os_family | default('') }},{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},{{ a.decision | default('') }},"{{ (a.root_cause | default('')) | replace('"', '""') }}","{{ (a.fix | default('')) | replace('"', '""') }}"
+          {{ host }},{{ a.os_family | default('') }},{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},"{{ (a.ca2023_alignment | default('')) | replace('"', '""') }}","{{ (a.ca2023_summary | default('')) | replace('"', '""') }}",{{ a.decision | default('') }},"{{ (a.root_cause | default('')) | replace('"', '""') }}","{{ (a.fix | default('')) | replace('"', '""') }}"
           {% endif %}
           {% endfor %}
 
