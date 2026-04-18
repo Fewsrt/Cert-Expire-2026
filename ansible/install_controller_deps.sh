@@ -11,7 +11,9 @@ echo "install_controller_deps.sh: cwd=$(pwd)" >&2
 python_from_shebang() {
   f="$1"
   [ -n "$f" ] && [ -r "$f" ] || return 0
+  # Shebang may be "#! /usr/bin/python3.12" (space after #!) — trim so [ -x ] works.
   line="$(sed -n '1s/^#!//p' "$f" | tr -d '\r' | head -1)"
+  line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
   case "$line" in
     */python*|*/platform-python*)
       if [ -x "$line" ]; then
@@ -48,11 +50,15 @@ for f in "$AP" "$AQ"; do
 done
 add_py /usr/libexec/platform-python
 add_py /usr/bin/python3
+# Ansible RPMs often use /usr/bin/python3.12 (or .11) — separate site-packages from python3.
+for _sfx in 12 11 10 9; do
+  add_py "/usr/bin/python3.${_sfx}"
+done
 
 echo "ansible-playbook: ${AP:-?}" >&2
 VERIFY="$(python_from_shebang "$AP")"
 [ -z "$VERIFY" ] && VERIFY="/usr/libexec/platform-python"
 [ -x "$VERIFY" ] || VERIFY="/usr/bin/python3"
-echo "Verifying winrm with: $VERIFY" >&2
+echo "Verifying winrm with: $VERIFY (must match: head -1 \"\$(command -v ansible-playbook)\")" >&2
 "$VERIFY" -c "import winrm; import requests; print('winrm + requests OK')"
 echo "install_controller_deps.sh: done." >&2
