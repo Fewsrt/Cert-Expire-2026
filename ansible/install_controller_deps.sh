@@ -6,6 +6,8 @@ set -eu
 cd "$(dirname "$0")"
 REQ="controller-pip-requirements.txt"
 
+echo "install_controller_deps.sh: cwd=$(pwd)" >&2
+
 python_from_shebang() {
   f="$1"
   [ -n "$f" ] && [ -r "$f" ] || return 0
@@ -20,14 +22,19 @@ seen=""
 add_py() {
   py="$1"
   case " $seen " in *" $py "*) return ;; esac
-  [ -z "$py" ] || [ ! -x "$py" ] && return
+  if [ -z "$py" ] || [ ! -x "$py" ]; then
+    return
+  fi
   seen="$seen $py"
   echo "pip install -> $py" >&2
   "$py" -m pip install -r "$REQ"
 }
 
-AP="$(command -v ansible-playbook)"
-AQ="$(command -v ansible 2>/dev/null || true)"
+# Do not use: AP=$(command -v ...) under plain `set -e` — if ansible is missing, some shells exit here.
+AP=""
+AQ=""
+command -v ansible-playbook >/dev/null 2>&1 && AP="$(command -v ansible-playbook)"
+command -v ansible >/dev/null 2>&1 && AQ="$(command -v ansible)"
 for f in "$AP" "$AQ"; do
   sh_py="$(python_from_shebang "$f")"
   [ -n "$sh_py" ] && add_py "$sh_py"
@@ -41,3 +48,4 @@ VERIFY="$(python_from_shebang "$AP")"
 [ -x "$VERIFY" ] || VERIFY="/usr/bin/python3"
 echo "Verifying winrm with: $VERIFY" >&2
 "$VERIFY" -c "import winrm; import requests; print('winrm + requests OK')"
+echo "install_controller_deps.sh: done." >&2
