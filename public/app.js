@@ -1404,24 +1404,70 @@ certutil -dump PK.der`
   };
 
   const linuxRhel = {
-    label: "RHEL-family Secure Boot check",
-    description: "ตรวจ Secure Boot state และอ่าน PK/KEK/db/dbx ด้วย mokutil พร้อมเช็ค shim, GRUB และ kernel จาก repo ที่ support",
-    code: `mokutil --sb-state
-mokutil --pk
-mokutil --kek
-mokutil --db
-mokutil --dbx
+    label: "RHEL-family Secure Boot summary check",
+    description: "สรุปผล PK/KEK/db/dbx แบบอ่านง่าย ไม่ dump certificate ทั้งใบ และเช็ค shim, GRUB, kernel จาก repo ที่ support",
+    code: `echo "===== Secure Boot state ====="
+mokutil --sb-state
+
+summarize_var() {
+  name="$1"
+  echo
+  echo "===== $name summary ====="
+  output="$(mokutil --"$name" 2>&1)"
+  echo "$output" | grep -E "^\\[key|Owner:|SHA1 Fingerprint:|Issuer:|Subject:|Not Before:|Not After :" || true
+  echo "Has_MS_KEK_2K_CA_2023=$(echo "$output" | grep -qi "Microsoft Corporation KEK 2K CA 2023" && echo true || echo false)"
+  echo "Has_Windows_UEFI_CA_2023=$(echo "$output" | grep -qi "Windows UEFI CA 2023" && echo true || echo false)"
+  echo "Has_MS_UEFI_CA_2023=$(echo "$output" | grep -qi "Microsoft UEFI CA 2023" && echo true || echo false)"
+  echo "Has_MS_Option_ROM_UEFI_CA_2023=$(echo "$output" | grep -qi "Microsoft Option ROM UEFI CA 2023" && echo true || echo false)"
+  echo "Has_2011_CA=$(echo "$output" | grep -qi "2011" && echo true || echo false)"
+}
+
+summarize_var pk
+summarize_var kek
+summarize_var db
+
+echo
+echo "===== dbx summary ====="
+dbx_output="$(mokutil --dbx 2>&1)"
+echo "$dbx_output" | grep -E "^\\[key|\\[SHA|^[[:space:]]+[0-9a-f]{64}$" | head -80 || true
+echo "DBX_Readable=$(echo "$dbx_output" | grep -qi "SHA\\|Certificate\\|Fingerprint" && echo true || echo false)"
+
+echo
+echo "===== package versions ====="
 rpm -q shim grub2-efi-x64 grub2-tools kernel`
   };
 
   const linuxUbuntu = {
-    label: "Ubuntu Secure Boot check",
-    description: "ตรวจ Secure Boot state และอ่าน PK/KEK/db/dbx ด้วย mokutil พร้อมเช็ค shim-signed, signed GRUB และ kernel",
-    code: `mokutil --sb-state
-mokutil --pk
-mokutil --kek
-mokutil --db
-mokutil --dbx
+    label: "Ubuntu Secure Boot summary check",
+    description: "สรุปผล PK/KEK/db/dbx แบบอ่านง่าย ไม่ dump certificate ทั้งใบ และเช็ค shim-signed, signed GRUB, kernel",
+    code: `echo "===== Secure Boot state ====="
+mokutil --sb-state
+
+summarize_var() {
+  name="$1"
+  echo
+  echo "===== $name summary ====="
+  output="$(mokutil --"$name" 2>&1)"
+  echo "$output" | grep -E "^\\[key|Owner:|SHA1 Fingerprint:|Issuer:|Subject:|Not Before:|Not After :" || true
+  echo "Has_MS_KEK_2K_CA_2023=$(echo "$output" | grep -qi "Microsoft Corporation KEK 2K CA 2023" && echo true || echo false)"
+  echo "Has_Windows_UEFI_CA_2023=$(echo "$output" | grep -qi "Windows UEFI CA 2023" && echo true || echo false)"
+  echo "Has_MS_UEFI_CA_2023=$(echo "$output" | grep -qi "Microsoft UEFI CA 2023" && echo true || echo false)"
+  echo "Has_MS_Option_ROM_UEFI_CA_2023=$(echo "$output" | grep -qi "Microsoft Option ROM UEFI CA 2023" && echo true || echo false)"
+  echo "Has_2011_CA=$(echo "$output" | grep -qi "2011" && echo true || echo false)"
+}
+
+summarize_var pk
+summarize_var kek
+summarize_var db
+
+echo
+echo "===== dbx summary ====="
+dbx_output="$(mokutil --dbx 2>&1)"
+echo "$dbx_output" | grep -E "^\\[key|\\[SHA|^[[:space:]]+[0-9a-f]{64}$" | head -80 || true
+echo "DBX_Readable=$(echo "$dbx_output" | grep -qi "SHA\\|Certificate\\|Fingerprint" && echo true || echo false)"
+
+echo
+echo "===== package versions ====="
 dpkg -l shim-signed shim grub-efi-amd64-signed grub2-common linux-image-generic`
   };
 
