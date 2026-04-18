@@ -1,4 +1,39 @@
 ---
+# Not a Windows guest issue: "No module named winrm" = install pywinrm on the Ansible controller
+# (see ansible/install_controller_deps.sh). WinRM is used only from the controller.
+
+- name: Preflight — ICMP from controller to each ansible_host (layer 3)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _targets: "{{ (groups['windows'] | default([])) + (groups['linux'] | default([])) }}"
+  tasks:
+    - name: Ping ansible_host for each VM (fails fast if network/DNS down; ICMP may be blocked on some Windows firewalls)
+      ansible.builtin.command:
+        argv:
+          - ping
+          - -c
+          - "2"
+          - -W
+          - "2"
+          - "{{ hostvars[item].ansible_host | default(item) }}"
+      loop: "{{ _targets }}"
+      changed_when: false
+
+- name: Preflight — WinRM to Windows guests (requires pywinrm on controller)
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - name: WinRM check (win_ping)
+      ansible.windows.win_ping:
+
+- name: Preflight — SSH to Linux guests
+  hosts: linux
+  gather_facts: false
+  tasks:
+    - name: SSH check (ping)
+      ansible.builtin.ping:
+
 - name: Assess Windows Secure Boot CA state
   hosts: windows
   gather_facts: false
