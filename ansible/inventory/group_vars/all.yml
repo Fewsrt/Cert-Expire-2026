@@ -6,3 +6,7 @@
 ansible_password: "{{ lookup('env', 'ANSIBLE_PASSWORD') }}"
 # Same secret for sudo (Linux) when play uses become: true
 ansible_become_password: "{{ lookup('env', 'ANSIBLE_PASSWORD') }}"
+
+# Linux: do not install distro packages during secureboot_ca_assessment by default (uses sbverify/pesign if present).
+# Override: -e secureboot_install_sbsigntools=true  or set true below.
+secureboot_install_sbsigntools: false

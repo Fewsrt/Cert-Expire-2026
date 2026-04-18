@@ -58,16 +58,27 @@ VCENTER_CSV=samples/vcenter_targets.csv ansible-inventory --list
 VCENTER_CSV=samples/vcenter_targets.csv ansible-playbook playbooks/secureboot_ca_assessment.yml
 ```
 
-By default the playbook **attempts to install `sbsigntools`** (`sbverify`) on Linux guests in the same run (PKCS#7 is preferred for bootloader CA flags — see **Prerequisites and verification** below). To skip that package step (assessment still uses embedded string scan if `sbverify` is absent):
+On the **Ansible controller** (often logged in as **root**), the production export usually lives under `/root/` — use an absolute path so it does not depend on `cd`:
 
 ```bash
-VCENTER_CSV=../path/to/vcenter-export.csv ansible-playbook playbooks/secureboot_ca_assessment.yml -e secureboot_install_sbsigntools=false
+cd /root/Cert-Expire-2026/ansible
+export ANSIBLE_PASSWORD='…'
+VCENTER_CSV=/root/secureboot_inventory_full-final.csv ansible-playbook playbooks/secureboot_ca_assessment.yml
 ```
 
-**RHEL / Alma / Rocky (optional):** if `sbsigntools` is still not found after enabling **CRB**, you may opt in to installing the **EPEL** release RPM from Fedora (adds a third-party repo — confirm with your security team):
+By default the playbook **does not install packages** on Linux guests: it uses `sbverify` or `pesign` if they are already installed (see **Prerequisites and verification** below). To let Ansible **install `sbsigntools` during the assessment run** (repos/CRB/EPEL as implemented in `tasks/install_sbsigntools_linux_tasks.yml`):
+
+```bash
+VCENTER_CSV=../path/to/vcenter-export.csv ansible-playbook playbooks/secureboot_ca_assessment.yml -e secureboot_install_sbsigntools=true
+```
+
+The same flag defaults to `false` in `ansible/inventory/group_vars/all.yml` (override there to avoid passing `-e` every time).
+
+**RHEL / Alma / Rocky (optional):** when install is enabled, if `sbsigntools` is still not found after enabling **CRB**, you may opt in to the **EPEL** release RPM (third-party repo — confirm with your security team):
 
 ```bash
 VCENTER_CSV=../path/to/vcenter-export.csv ansible-playbook playbooks/secureboot_ca_assessment.yml \
+  -e secureboot_install_sbsigntools=true \
   -e secureboot_install_epel_for_sbsigntools=true
 ```
 
@@ -77,15 +88,15 @@ This section summarizes **what the playbook uses**, **what you may need to insta
 
 ### Linux (guest)
 
-| What is measured | Tool in guest | One install path (playbook) |
+| What is measured | Tool in guest | Packages (playbook does not install by default) |
 |---|---|---|
 | Firmware variables (`db`, `KEK`, …) | `mokutil` | Preinstalled (`mokutil` package). |
-| Active EFI binary — PE signature | `sbverify --list` first, else `pesign -i file -S` | From distro packages `sbsigntools`/`sbsigntool` and `pesign` (no scanning raw EFI bytes). |
+| Active EFI binary — PE signature | `sbverify --list` first, else `pesign -i file -S` | Distro packages `sbsigntools`/`sbsigntool` and `pesign`; optional automated install with `-e secureboot_install_sbsigntools=true`. |
 
-**One package path per OS (what the playbook installs):**
+**If you opt in to automated install** (`-e secureboot_install_sbsigntools=true`), tasks roughly follow:
 
 - **Debian / Ubuntu:** `apt install sbsigntool` (enable **universe** on Ubuntu if needed). Verify: `command -v sbverify`.
-- **Red Hat family:** Enable **CRB** (playbook does this), then `dnf install sbsigntools`. If your org allows **EPEL**, run the assessment with `-e secureboot_install_epel_for_sbsigntools=true` so the playbook adds EPEL and installs the same package name. Signing workflows for custom kernels use **`pesign`**; this assessment only **reads** vendor shim/GRUB via **`sbverify`** — see [RHEL — Signing a kernel and modules for Secure Boot](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/managing_monitoring_and_updating_the_kernel/signing-a-kernel-and-modules-for-secure-boot_managing-monitoring-and-updating-the-kernel).
+- **Red Hat family:** Enable **CRB** (tasks do this), then `dnf install sbsigntools`. If your org allows **EPEL**, add `-e secureboot_install_epel_for_sbsigntools=true`. This assessment only **reads** vendor shim/GRUB via **`sbverify`** — see [RHEL — Signing a kernel and modules for Secure Boot](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/managing_monitoring_and_updating_the_kernel/signing-a-kernel-and-modules-for-secure-boot_managing-monitoring-and-updating-the-kernel).
 - **SUSE / openSUSE:** `zypper install sbsigntools` only.
 
 Upstream tooling for UEFI PE signatures: **sbsigntools** ([Fedora package overview](https://packages.fedoraproject.org/pkgs/sbsigntools/sbsigntools/)).

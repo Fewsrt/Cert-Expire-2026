@@ -1,6 +1,6 @@
 ---
 # Standalone: install sbsigntools (sbverify) on Linux guests only.
-# secureboot_ca_assessment.yml installs sbsigntools by default; use this playbook for a one-off install.
+# secureboot_ca_assessment.yml does not install packages unless -e secureboot_install_sbsigntools=true; use this playbook for a one-off install.
 # RHEL + EPEL (opt-in): add -e secureboot_install_epel_for_sbsigntools=true
 #
 #   cd ansible && VCENTER_CSV=/path/to.csv ansible-playbook playbooks/install_sbsigntools_linux.yml --limit NAME

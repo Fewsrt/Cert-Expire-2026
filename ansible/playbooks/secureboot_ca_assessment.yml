@@ -2,10 +2,10 @@
 # Not a Windows guest issue: "No module named winrm" = install pywinrm on the Ansible controller
 # (see ansible/install_controller_deps.sh). WinRM is used only from the controller.
 #
-# By default installs distro sbsigntools/sbsigntool (sbverify) on Linux — bootloader evidence is PKCS#7 via sbverify only (no raw binary scan).
-# Skip package install:
-#   -e secureboot_install_sbsigntools=false
-# RHEL — use EPEL for sbsigntools when org allows (otherwise CRB + vendor repos only):
+# Linux package install is OFF by default (group_vars or -e). Assessment uses sbverify/pesign if already on the guest.
+# Opt in to repo/CRB/EPEL install during the same run:
+#   -e secureboot_install_sbsigntools=true
+# RHEL — EPEL (optional, security review):
 #   -e secureboot_install_epel_for_sbsigntools=true
 
 # Per-host connectivity map on localhost: used when a guest never gets secureboot_assessment (unreachable, auth, etc.).
@@ -66,9 +66,9 @@
         secureboot_connectivity_map: "{{ secureboot_connectivity_map | combine({ item.item: secureboot_connectivity_map[item.item] | default({}) | combine({ 'ssh_ok': (not (item.unreachable | default(false)) and not (item.failed | default(false))), 'ssh_msg': (item.msg | default('') | string) | truncate(2000) }) }) }}"
       loop: "{{ secureboot_ssh_reg.results | default([]) }}"
 
-- name: Install sbsigntools (sbverify) on Linux when enabled (default on)
+- name: Optional — install sbsigntools on Linux (off by default; see group_vars all.yml)
   hosts: linux
-  gather_facts: true
+  gather_facts: "{{ secureboot_install_sbsigntools | default(false) | bool }}"
   become: true
   ignore_unreachable: true
   become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
@@ -77,7 +77,7 @@
   tasks:
     - name: Install sbsigntools when secureboot_install_sbsigntools is true
       when:
-        - secureboot_install_sbsigntools | default(true) | bool
+        - secureboot_install_sbsigntools | default(false) | bool
         - (_cm[inventory_hostname] | default({})).ssh_ok | default(false)
       block:
         - ansible.builtin.include_tasks: tasks/install_sbsigntools_linux_tasks.yml
@@ -91,7 +91,7 @@
               failure_category: package_install
               decision: PACKAGE_INSTALL_FAILED
               root_cause: "sbsigntools install or prerequisite task failed: {{ ansible_failed_result.msg | default('unknown') | string | truncate(1500) }}"
-              fix: "Fix apt/yum/dnf/zypper access, repos (CRB/EPEL policy), sudo/su; then rerun. Or run with -e secureboot_install_sbsigntools=false if policy forbids install."
+              fix: "Fix apt/yum/dnf/zypper access, repos (CRB/EPEL policy), sudo/su; then rerun. Or disable automated install: secureboot_install_sbsigntools=false in group_vars."
               operational_interpretation: "Guest was reachable over SSH but the optional package install play did not complete; bootloader PKCS#7 was not collected in this run."
               secure_boot_enabled: ""
               db_has_2011: ""
@@ -405,6 +405,7 @@
       block:
         - name: Collect Linux Secure Boot DB and bootloader CA evidence
           ansible.builtin.shell:
+            executable: /bin/sh
             cmd: |
                 set +e
                 python3 - <<'PY'
@@ -827,8 +828,6 @@
                   "operational_interpretation": operational_interpretation_linux(),
                 }, separators=(",", ":")))
                 PY
-            args:
-              executable: /bin/sh
           register: linux_assessment_raw
           changed_when: false
 
@@ -917,7 +916,8 @@
           {% set icmp_txt = (row.icmp_msg | default('') | truncate(400)) if not (row.icmp_ok | default(false)) else 'ok' %}
           {{ host }},linux,,,,,,"",,,,"","","connectivity","CONNECTIVITY_FAILED","No in-guest assessment: SSH did not succeed.",CONNECTIVITY_FAILED,"{{ ('SSH failed: ' ~ (row.ssh_msg | default(''))) | replace('"', '""') }}","Fix SSH port, keys, sudo, ansible_user.","{{ ('ICMP from controller: ' ~ icmp_txt) | replace('"', '""') }}"
           {% else %}
-          {{ host }},,,,,,,"",,,,"","","report_gap","REPORT_GAP","Unexpected reporting gap.",REPORT_GAP,"No secureboot_assessment and transport looked OK — see -vvv log.","",""
+          {% set gap_family = 'windows' if host in (groups['windows'] | default([])) else 'linux' %}
+          {{ host }},{{ gap_family }},,,,,,"",,,,"","","report_gap","REPORT_GAP","Unexpected reporting gap.",REPORT_GAP,"No secureboot_assessment and transport looked OK — see -vvv log.","",""
           {% endif %}
           {% endif %}
           {% endfor %}
