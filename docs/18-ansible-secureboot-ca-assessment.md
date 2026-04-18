@@ -76,7 +76,7 @@ The CSV report includes:
 | `active_bootloader_file` | The EFI file considered active |
 | `active_bootloader_has_2011` | Active bootloader certificate chain contains 2011 CA text |
 | `active_bootloader_has_2023` | Active bootloader certificate chain contains 2023 CA text |
-| `active_bootloader_signature_method` | Linux: `sbverify`, `strings_binary_scan`, `sbverify_and_strings_scan`, etc. Windows: `windows_authenticode` |
+| `active_bootloader_signature_method` | Linux: `sbverify` (PKCS#7 from `sbverify --list`), `sbverify_failed`, `sbverify_not_installed`, `unreadable`, `none`. Windows: `windows_authenticode` |
 | `decision` | `PASS_OR_LOW_RISK`, `IMPACTED`, `NEEDS_EVIDENCE`, `NEEDS_MANUAL_REVIEW`, or related final state |
 | `root_cause` | Why the host is not pass/low-risk |
 | `fix` | The remediation workflow for that host |
@@ -116,7 +116,7 @@ Active file:
 /boot/efi/EFI/redhat/shimx64.efi
 ```
 
-The certificate chain is read with `sbverify --list`. If `sbverify` is missing, the host is marked `NEEDS_EVIDENCE` because the bootloader CA chain is not proven yet.
+`active_bootloader_has_2011` / `active_bootloader_has_2023` are derived **only** from **`sbverify --list`** output (regex on PKCS#7 text). There is **no** strings/binary fallback for those flags. If `sbverify` is missing, non-zero, or the listing matches no known markers, the host is typically `NEEDS_EVIDENCE` until `sbsigntools` is installed and a successful listing is obtained.
 
 ## Remediation Mapping
 
