@@ -64,6 +64,14 @@ Install **`sbsigntools`** (`sbverify`) on Linux guests in the same run (required
 VCENTER_CSV=../path/to/vcenter-export.csv ansible-playbook playbooks/secureboot_ca_assessment.yml -e secureboot_install_sbsigntools=true
 ```
 
+**RHEL / Alma / Rocky (optional):** if `sbsigntools` is still not found after enabling **CRB**, you may opt in to installing the **EPEL** release RPM from Fedora (adds a third-party repo — confirm with your security team):
+
+```bash
+VCENTER_CSV=../path/to/vcenter-export.csv ansible-playbook playbooks/secureboot_ca_assessment.yml \
+  -e secureboot_install_sbsigntools=true \
+  -e secureboot_install_epel_for_sbsigntools=true
+```
+
 ## Prerequisites and verification (by OS)
 
 This section summarizes **what the playbook uses**, **what you may need to install**, and **how to double-check manually**. Official references are linked.

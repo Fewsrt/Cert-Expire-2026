@@ -2,9 +2,10 @@
 # Not a Windows guest issue: "No module named winrm" = install pywinrm on the Ansible controller
 # (see ansible/install_controller_deps.sh). WinRM is used only from the controller.
 #
-# Optional: install sbsigntools (sbverify) on Linux guests before assessment for authoritative
-# PKCS#7 listing instead of strings-only heuristics:
+# Optional: install sbsigntools (sbverify) on Linux guests before assessment (PKCS#7 for Linux flags):
 #   ansible-playbook playbooks/secureboot_ca_assessment.yml -e secureboot_install_sbsigntools=true
+# RHEL only — also enable EPEL from Fedora to pull sbsigntools when CRB is not enough (opt-in):
+#   -e secureboot_install_sbsigntools=true -e secureboot_install_epel_for_sbsigntools=true
 
 - name: Preflight — ICMP from controller to each ansible_host (layer 3)
   hosts: localhost

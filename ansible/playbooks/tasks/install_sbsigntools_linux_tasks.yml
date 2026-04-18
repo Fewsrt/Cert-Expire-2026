@@ -59,6 +59,22 @@
     - sbsigntools_package_name | default('') | length == 0
     - ansible_facts['os_family'] == 'RedHat'
 
+# Opt-in: adds Fedora EPEL repo (organizational policy may forbid). See docs/18.
+- name: RedHat — install EPEL release RPM (opt-in secureboot_install_epel_for_sbsigntools)
+  ansible.builtin.command:
+    argv:
+      - bash
+      - -lc
+      - dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{{ ansible_distribution_major_version }}.noarch.rpm"
+  register: rh_epel
+  failed_when: false
+  changed_when: rh_epel.rc == 0
+  when:
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'RedHat'
+    - ansible_distribution_major_version | int >= 8
+    - secureboot_install_epel_for_sbsigntools | default(false) | bool
+
 - name: RedHat — dnf install sbsigntools (best effort; may still need EPEL on some systems)
   ansible.builtin.command:
     argv:
