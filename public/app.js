@@ -1034,8 +1034,8 @@ function defaultResult() {
 
 function getCommands(testCase) {
   const windowsCheck = {
-    label: "Windows check CA / KEK / db / dbx / events",
-    description: "ตรวจ Secure Boot state, หา CA 2023 ใน db, หา KEK 2023 ใน KEK, อ่าน db/dbx เพื่อเก็บหลักฐาน และดู event ว่า update สำเร็จหรือ fail จุดไหน",
+    label: "Windows check CA / KEK / db / dbx",
+    description: "ตรวจ Secure Boot state, หา CA 2023 ใน db, หา KEK 2023 ใน KEK และอ่าน db/dbx เพื่อเก็บหลักฐานก่อน/หลัง update",
     code: `Confirm-SecureBootUEFI
 
 $vars = "PK","KEK","db","dbx"
@@ -1055,10 +1055,75 @@ foreach ($name in $vars) {
 }
 
 Get-ItemProperty -Path HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot -Name AvailableUpdates -ErrorAction SilentlyContinue
-Get-ItemProperty -Path HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\Servicing -ErrorAction SilentlyContinue
+Get-ItemProperty -Path HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\Servicing -ErrorAction SilentlyContinue`
+  };
 
-Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='TPM-WMI'; Id=1032,1036,1043,1044,1045,1795,1796,1797,1798,1799,1800,1801,1802,1803,1808} -MaxEvents 50 |
-  Select-Object TimeCreated, Id, ProviderName, Message`
+  const windowsPatchCheck = {
+    label: "Windows patch level check",
+    description: "ใช้ดูว่า OS build/KB เก่าเกินไปไหม ก่อนสรุปผล CA 2023 ควร patch เป็น cumulative update ล่าสุดแล้ว retest",
+    code: `Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsBuildNumber, OsHardwareAbstractionLayer
+
+Get-HotFix |
+  Sort-Object InstalledOn -Descending |
+  Select-Object -First 10 HotFixID, Description, InstalledOn, InstalledBy
+
+dism /online /get-packages /format:table |
+  findstr /i "Package_for_RollupFix"`
+  };
+
+  const windowsOnlineUpdate = {
+    label: "Windows online / WSUS update path",
+    description: "ใช้เมื่อเครื่องออกเน็ตหรือรับ patch ผ่าน WSUS/SCCM/Windows Update ได้ หลัง update ต้อง reboot แล้วตรวจ CA/KEK/db/dbx และ bootloader ซ้ำ",
+    code: `# GUI / Server with Desktop Experience
+start ms-settings:windowsupdate
+
+# Server Core หรือใช้เมนู built-in ของ Windows Server
+sconfig
+# เลือก option 6: Download and Install Updates
+
+# หลังติดตั้ง cumulative update แล้ว reboot
+Restart-Computer`
+  };
+
+  const windowsOfflineUpdate = {
+    label: "Windows offline update path",
+    description: "ใช้เมื่อ VM ออกเน็ตไม่ได้ ให้โหลด cumulative update .msu/.cab จากเครื่องอื่นหรือ WSUS export แล้วนำมาติดตั้งใน VM",
+    code: `New-Item -ItemType Directory -Force -Path C:\\Patch
+
+# MSU package
+Get-ChildItem C:\\Patch\\*.msu | ForEach-Object {
+  Start-Process wusa.exe -ArgumentList "\`"$($_.FullName)\`" /quiet /norestart" -Wait
+}
+
+# CAB package
+Get-ChildItem C:\\Patch\\*.cab | ForEach-Object {
+  dism /online /add-package /packagepath:"$($_.FullName)"
+}
+
+# ตรวจ pending reboot แล้ว reboot
+reg query "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired"
+Restart-Computer`
+  };
+
+  const windowsEventCheck = {
+    label: "Windows Secure Boot event check",
+    description: "ตรวจ event โดยไม่ lock ProviderName เพื่อเลี่ยง error บาง OS ที่ไม่มี provider TPM-WMI แต่ยังค้นหา event ID ที่เกี่ยวข้องได้",
+    code: `$ids = 1032,1036,1043,1044,1045,1795,1796,1797,1798,1799,1800,1801,1802,1803,1808
+
+$providers = Get-WinEvent -ListProvider * -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -match "TPM|SecureBoot|Secure-Boot" } |
+  Select-Object -ExpandProperty Name
+
+Write-Host "Matching providers on this OS:"
+$providers
+
+try {
+  Get-WinEvent -FilterHashtable @{LogName='System'; Id=$ids} -MaxEvents 50 -ErrorAction Stop |
+    Select-Object TimeCreated, Id, ProviderName, LevelDisplayName, Message
+} catch {
+  Write-Host "No matching Secure Boot update events found in System log for the selected IDs."
+  Write-Host $_.Exception.Message
+}`
   };
 
   const windowsEventGuide = {
@@ -1177,10 +1242,10 @@ mv vmname.nvram vmname.nvram_old
   if (testCase.os.includes("Ubuntu")) return [linuxUbuntu];
   if (testCase.os.includes("RHEL") || testCase.os.includes("Rocky") || testCase.os.includes("Oracle")) return [linuxRhel];
   if (testCase.id === "1.2") return [{ label: "Windows Secure Boot state", code: "Confirm-SecureBootUEFI" }];
-  if (testCase.id === "1.3") return [windowsCheck, windowsBootloader, windowsEventGuide, pkCheck];
-  if (testCase.id === "2.2") return [windowsCheck, windowsBootloader, windowsEventGuide, windowsTrigger, esxiNvram];
-  if (testCase.id === "4.2") return [bitLocker, windowsCheck, windowsBootloader, windowsTrigger];
-  return [windowsCheck, windowsBootloader, windowsEventGuide, windowsTrigger];
+  if (testCase.id === "1.3") return [windowsPatchCheck, windowsCheck, windowsBootloader, windowsEventCheck, windowsEventGuide, pkCheck, windowsOnlineUpdate, windowsOfflineUpdate];
+  if (testCase.id === "2.2") return [windowsPatchCheck, windowsCheck, windowsBootloader, windowsEventCheck, windowsEventGuide, windowsTrigger, esxiNvram, windowsOnlineUpdate, windowsOfflineUpdate];
+  if (testCase.id === "4.2") return [bitLocker, windowsPatchCheck, windowsCheck, windowsBootloader, windowsEventCheck, windowsTrigger, windowsOnlineUpdate, windowsOfflineUpdate];
+  return [windowsPatchCheck, windowsCheck, windowsBootloader, windowsEventCheck, windowsEventGuide, windowsTrigger, windowsOnlineUpdate, windowsOfflineUpdate];
 }
 
 function loadLocalResults() {
