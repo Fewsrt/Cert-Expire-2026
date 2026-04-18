@@ -20,55 +20,23 @@ The bundled sample shape is `ansible/samples/vcenter_targets.csv`.
 
 Use a Windows host with [VMware PowerCLI](https://developer.broadcom.com/powercli) installed and network access to vCenter.
 
-### 1) Connect and export
+### 1) Export (script in this repo)
+
+From the repo’s `ansible` folder (or any path to the script):
 
 ```powershell
-# Requires: VMware PowerCLI, access to vCenter
-Connect-VIServer vcenter.example.com
+cd ansible
+# Lab / self-signed vCenter TLS:
+.\inventory\vcenter_export_powercli.ps1 -VIServer vcenter.example.com -OutCsv C:\exports\secureboot_inventory_full.csv -IgnoreInvalidCertificate
 
-$report = Get-VM | ForEach-Object {
-  $vm = $_
-  $guest = $vm.ExtensionData.Guest
-
-  $ips = @()
-  if ($guest -and $guest.Net) {
-    foreach ($net in $guest.Net) {
-      if ($net.IpConfig -and $net.IpConfig.IpAddress) {
-        $ips += $net.IpConfig.IpAddress | ForEach-Object { $_.IpAddress }
-      }
-    }
-  }
-  $ips = $ips | Where-Object { $_ -and ($_ -notmatch ':') } | Sort-Object -Unique
-
-  $dns = @()
-  try {
-    if ($guest -and $guest.DnsConfig -and $guest.DnsConfig.IpAddress) {
-      $dns += $guest.DnsConfig.IpAddress
-    }
-  } catch {}
-  $dns = $dns | Where-Object { $_ } | Sort-Object -Unique
-
-  [pscustomobject]@{
-    check        = "true"
-    VMName       = $vm.Name
-    IP           = ($ips -join ',')
-    OS           = $guest.GuestFullName
-    DNS          = ($dns -join ',')
-    Hostname     = $guest.HostName
-    ToolsStatus  = $guest.ToolsRunningStatus
-    Firmware     = $vm.ExtensionData.Config.Firmware
-    SecureBoot   = $vm.ExtensionData.Config.BootOptions.EfiSecureBootEnabled
-    HWVersion    = $vm.Version
-    ESXi         = $vm.VMHost.Version
-    ESXiBuild    = $vm.VMHost.Build
-    PowerState   = $vm.PowerState
-  }
-}
-
-$report | Export-Csv -Path secureboot_inventory_full.csv -NoTypeInformation -Encoding utf8
+# Or with explicit credentials:
+$cred = Get-Credential
+.\inventory\vcenter_export_powercli.ps1 -VIServer 192.168.100.141 -Credential $cred -OutCsv .\secureboot_inventory_full.csv -IgnoreInvalidCertificate
 ```
 
-`check = "true"` on every row matches what `vcenter_csv_inventory.py` expects; you can later edit the CSV and set `check` to `false` for VMs to skip.
+`ansible/inventory/vcenter_export_powercli.ps1` writes the **same column layout** as `vcenter_export_govc.sh` (`check`, `vm_name`, `ansible_host`, `os_family`, `guest_os`, …) so you can swap tools without changing Ansible. Each row has `check=true`; edit the CSV and set `check` to `false` for VMs to skip.
+
+If you cannot run scripts, you can still use `Connect-VIServer` / `Get-VM` / `Export-Csv` manually; align column names with `ansible/samples/vcenter_targets.csv` and `vcenter_csv_inventory.py`.
 
 ### 2) Move the CSV to your Ansible controller
 
@@ -157,6 +125,7 @@ If your CSV has **no** `check` column (older exports), use `export VCENTER_INCLU
 | Artifact | Role |
 |----------|------|
 | `ansible/inventory/vcenter_export_govc.sh` | vCenter → CSV (govc; Path B) |
+| `ansible/inventory/vcenter_export_powercli.ps1` | vCenter → CSV (PowerCLI; Path A) |
 | `ansible/inventory/vcenter_csv_inventory.sh` | Run dynamic inventory CLI on Linux/macOS (`python3` → `vcenter_csv_inventory.py`) |
 | `ansible/inventory/vcenter_csv_inventory.py` | Column aliases and `VCENTER_*` variables |
 | [18-ansible-secureboot-ca-assessment.md](18-ansible-secureboot-ca-assessment.md) | Run the Secure Boot CA assessment playbook |
