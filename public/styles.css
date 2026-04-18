@@ -418,6 +418,10 @@ h1 {
   margin: 10px 0;
 }
 
+.command-download {
+  margin-top: 8px;
+}
+
 .command-box strong {
   display: block;
   margin-bottom: 6px;

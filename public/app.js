@@ -198,6 +198,7 @@ function renderCase(testCase) {
   const heading = fragment.querySelector(".case-heading");
   const actions = document.createElement("div");
   actions.className = "case-actions";
+  actions.appendChild(makeCaseActionButton("โหลด script รวม", "secondary", () => downloadCaseScript(testCase)));
   actions.appendChild(makeCaseActionButton("Edit", "secondary", () => editCase(testCase)));
   actions.appendChild(makeCaseActionButton("Delete case", "danger", () => deleteCase(testCase.id)));
   actions.appendChild(badge);
@@ -220,7 +221,7 @@ function renderCase(testCase) {
   fillList(fragment.querySelector(".steps"), testCase.steps);
   fillList(fragment.querySelector(".expected"), testCase.expected);
   fillList(fragment.querySelector(".remediation"), testCase.remediation);
-  fillCommands(fragment.querySelector(".commands"), (testCase.commands && testCase.commands.length) ? testCase.commands : getCommands(testCase));
+  fillCommands(fragment.querySelector(".commands"), getCaseCommands(testCase), testCase);
 
   const form = fragment.querySelector(".result-form");
   Object.entries(result).forEach(([key, value]) => {
@@ -277,6 +278,19 @@ function makeCaseActionButton(label, className, onClick) {
   button.textContent = label;
   button.addEventListener("click", onClick);
   return button;
+}
+
+function getCaseCommands(testCase) {
+  return (testCase.commands && testCase.commands.length) ? testCase.commands : getCommands(testCase);
+}
+
+function downloadCaseScript(testCase) {
+  const commands = getCaseCommands(testCase);
+  const isWindows = /Windows/i.test(testCase.os || "");
+  const extension = isWindows ? "ps1" : "sh";
+  const script = isWindows ? buildPowerShellScript(testCase, commands) : buildShellScript(testCase, commands);
+  const fileName = `${sanitizeFileName(`${testCase.id}-${testCase.os || "vm"}-${testCase.esxi || "esxi"}`)}.${extension}`;
+  downloadTextFile(fileName, isWindows ? `\uFEFF${script}` : script, isWindows ? "text/plain;charset=utf-8" : "text/x-shellscript;charset=utf-8");
 }
 
 function editCase(testCase) {
@@ -374,7 +388,7 @@ function fillList(container, items) {
   });
 }
 
-function fillCommands(container, commands) {
+function fillCommands(container, commands, testCase) {
   container.innerHTML = "";
   if (!commands.length) {
     const empty = document.createElement("p");
@@ -386,13 +400,134 @@ function fillCommands(container, commands) {
   commands.forEach((item) => {
     const box = document.createElement("div");
     box.className = "command-box";
+    const downloadButton = document.createElement("button");
+    downloadButton.type = "button";
+    downloadButton.className = "secondary command-download";
+    downloadButton.textContent = "โหลด command นี้";
+    downloadButton.addEventListener("click", () => downloadSingleCommandScript(testCase, item));
     box.innerHTML = `
       <strong>${escapeHtml(item.label)}</strong>
       ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}
       <pre><code>${escapeHtml(item.code)}</code></pre>
     `;
+    box.appendChild(downloadButton);
     container.appendChild(box);
   });
+}
+
+function downloadSingleCommandScript(testCase, command) {
+  const isWindows = /Windows/i.test(testCase.os || "");
+  const extension = isWindows ? "ps1" : "sh";
+  const commands = [command];
+  const script = isWindows ? buildPowerShellScript(testCase, commands) : buildShellScript(testCase, commands);
+  const fileName = `${sanitizeFileName(`${testCase.id}-${command.label || "command"}`)}.${extension}`;
+  downloadTextFile(fileName, isWindows ? `\uFEFF${script}` : script, isWindows ? "text/plain;charset=utf-8" : "text/x-shellscript;charset=utf-8");
+}
+
+function buildPowerShellScript(testCase, commands) {
+  const title = `Test ${testCase.id} - ${testCase.section} - ${testCase.title}`;
+  const sections = commands.map((item) => {
+    return `Write-ResultSection -Name ${quotePowerShellString(item.label || "Command")} -Block {\n${item.code || ""}\n}`;
+  }).join("\n\n");
+
+  return `# ${title}
+# Run as Administrator on the target Windows VM.
+# This script writes command results only to a timestamped TXT report next to this script.
+
+$ErrorActionPreference = "Continue"
+$ReportPath = Join-Path $PSScriptRoot (${quotePowerShellString(sanitizeFileName(`${testCase.id}-report`))} + "-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".txt")
+
+function Write-ResultSection {
+  param(
+    [string]$Name,
+    [scriptblock]$Block
+  )
+
+  "===== $Name =====" | Out-File -FilePath $ReportPath -Encoding UTF8 -Append
+  try {
+    & $Block *>&1 | Out-File -FilePath $ReportPath -Encoding UTF8 -Append
+  } catch {
+    $_ | Out-File -FilePath $ReportPath -Encoding UTF8 -Append
+  }
+  "" | Out-File -FilePath $ReportPath -Encoding UTF8 -Append
+}
+
+"${escapeForPowerShellDoubleQuoted(title)}" | Out-File -FilePath $ReportPath -Encoding UTF8
+("Generated: " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz")) | Out-File -FilePath $ReportPath -Encoding UTF8 -Append
+"" | Out-File -FilePath $ReportPath -Encoding UTF8 -Append
+
+${sections}
+
+Write-Host "Report saved to $ReportPath"
+`;
+}
+
+function buildShellScript(testCase, commands) {
+  const title = `Test ${testCase.id} - ${testCase.section} - ${testCase.title}`;
+  const sections = commands.map((item) => {
+    return `run_section ${quoteShellString(item.label || "Command")} <<'COMMAND_BLOCK'\n${item.code || ""}\nCOMMAND_BLOCK`;
+  }).join("\n\n");
+
+  return `#!/bin/sh
+# ${title}
+# Run on the target Linux/ESXi VM or shell.
+# This script writes command results only to a timestamped TXT report next to this script.
+
+set +e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPORT_PATH="$SCRIPT_DIR/${sanitizeFileName(`${testCase.id}-report`)}-$(date +%Y%m%d-%H%M%S).txt"
+
+run_section() {
+  name="$1"
+  echo "===== $name =====" >> "$REPORT_PATH"
+  sh -s >> "$REPORT_PATH" 2>&1
+  echo "" >> "$REPORT_PATH"
+}
+
+echo ${quoteShellString(title)} > "$REPORT_PATH"
+echo "Generated: $(date '+%Y-%m-%d %H:%M:%S %z')" >> "$REPORT_PATH"
+echo "" >> "$REPORT_PATH"
+
+${sections}
+
+echo "Report saved to $REPORT_PATH"
+`;
+}
+
+function downloadTextFile(fileName, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function sanitizeFileName(value) {
+  return String(value || "download")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "download";
+}
+
+function quotePowerShellString(value) {
+  return `'${String(value || "").replace(/'/g, "''")}'`;
+}
+
+function quoteShellString(value) {
+  return `'${String(value || "").replace(/'/g, "'\\''")}'`;
+}
+
+function escapeForPowerShellDoubleQuoted(value) {
+  return String(value || "")
+    .replace(/`/g, "``")
+    .replace(/\$/g, "`$")
+    .replace(/"/g, "`\"");
 }
 
 function parseLines(value) {
