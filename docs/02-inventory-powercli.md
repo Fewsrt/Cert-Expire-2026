@@ -148,7 +148,7 @@ If your CSV has **no** `check` column (older exports), use `export VCENTER_INCLU
 ## After export (both paths)
 
 - **Narrow scope:** Edit the CSV so only VMs you want assessed have `check=true`, or use a smaller file and set `VCENTER_CSV` accordingly.
-- **Field notes:** IP and hostname work best when **VMware Tools** is running in the guest. OS family is inferred from guest OS text (`windows` → Windows inventory group). Secure Boot / firmware in the CSV come from vSphere config; the assessment playbook still verifies on the guest.
+- **Field notes:** IP and hostname work best when **VMware Tools** is running in the guest. If `GuestFullName` is empty, the govc export uses **`Config.GuestId`** (e.g. `windows2019srv_64Guest`) and VM name hints so **Windows VMs are not misclassified as Linux**. Secure Boot / firmware in the CSV come from vSphere config; powered-off or template VMs may show `unknown` until Tools report guest details; the assessment playbook still verifies on the guest.
 
 ---
 

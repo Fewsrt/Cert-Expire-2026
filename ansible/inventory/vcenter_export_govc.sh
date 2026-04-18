@@ -95,15 +95,29 @@ while IFS= read -r vm_path; do
   fi
 
   guest_os=""
+  guest_id=""
   if [[ -n "$vm_json" && "$vm_json" != "null" ]]; then
-    guest_os="$(echo "$vm_json" | jq -r '.Guest.GuestFullName // .Config.Version // ""' 2>/dev/null || true)"
+    guest_os="$(echo "$vm_json" | jq -r '.Guest.GuestFullName // ""' 2>/dev/null || true)"
+    guest_id="$(echo "$vm_json" | jq -r '.Config.GuestId // ""' 2>/dev/null || true)"
   fi
-  [[ -z "$guest_os" ]] && guest_os="unknown"
-  gl="$(echo "$guest_os" | tr '[:upper:]' '[:lower:]')"
-  if [[ "$gl" == *windows* ]]; then
+  # When Tools/guest is empty, GuestId still reflects the configured OS type (e.g. windows2019srv_64Guest)
+  if [[ -z "${guest_os//[[:space:]]/}" && -n "$guest_id" ]]; then
+    guest_os="$guest_id"
+  fi
+  [[ -z "${guest_os//[[:space:]]/}" ]] && guest_os="unknown"
+
+  g_l="$(echo "$guest_os" | tr '[:upper:]' '[:lower:]')"
+  id_l="$(echo "$guest_id" | tr '[:upper:]' '[:lower:]')"
+  n_l="$(echo "$name" | tr '[:upper:]' '[:lower:]')"
+  os_family="linux"
+  if [[ "$g_l" == *windows* ]]; then
     os_family="windows"
-  else
-    os_family="linux"
+  elif [[ "$id_l" == windows* || "$id_l" == winnet* || "$id_l" == winlonghorn* ]]; then
+    os_family="windows"
+  elif [[ "$id_l" =~ ^win[0-9] ]]; then
+    os_family="windows"
+  elif [[ "$n_l" == *windows* || "$n_l" == *win-serve* || "$n_l" == *win201* || "$n_l" == *win202* || "$n_l" == *ws20* ]]; then
+    os_family="windows"
   fi
 
   sb_raw="false"
