@@ -1,5 +1,6 @@
 # Included by secureboot_ca_assessment.yml (optional) and install_sbsigntools_linux.yml.
 # Requires gather_facts (os_family) on the play.
+# Best-effort: missing repos or zypper/dnf modules must not fail the overall assessment.
 
 - name: Install package (explicit -e sbsigntools_package_name=...)
   ansible.builtin.package:
@@ -37,13 +38,43 @@
     - ansible_facts['os_family'] == 'Debian'
     - apt_sbsigntools is failed
 
-- name: RHEL/SUSE/Others — package sbsigntools
+- name: RedHat — dnf install sbsigntools (best effort; may need CRB/EPEL)
+  ansible.builtin.command:
+    argv:
+      - bash
+      - -lc
+      - command -v dnf >/dev/null 2>&1 && dnf install -y sbsigntools || yum install -y sbsigntools
+  register: rh_sbsign
+  failed_when: false
+  changed_when: rh_sbsign.rc == 0
+  when:
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'RedHat'
+
+- name: SUSE — zypper install sbsigntools (best effort)
+  ansible.builtin.command:
+    argv:
+      - zypper
+      - --non-interactive
+      - install
+      - -y
+      - sbsigntools
+  register: suse_sbsign
+  failed_when: false
+  changed_when: suse_sbsign.rc == 0
+  when:
+    - sbsigntools_package_name | default('') | length == 0
+    - ansible_facts['os_family'] == 'Suse'
+
+- name: Other Linux — package sbsigntools (best effort)
   ansible.builtin.package:
     name: sbsigntools
     state: present
+  register: pkg_other
+  failed_when: false
   when:
     - sbsigntools_package_name | default('') | length == 0
-    - ansible_facts['os_family'] != 'Debian'
+    - ansible_facts['os_family'] not in ['Debian', 'RedHat', 'Suse']
 
 - name: Verify sbverify is on PATH
   ansible.builtin.command:
@@ -53,16 +84,9 @@
       - command -v sbverify
   register: which_sbverify
   changed_when: false
+  failed_when: false
 
-- name: Fail if sbverify still missing after package install
-  ansible.builtin.assert:
-    that:
-      - which_sbverify.rc == 0
-    fail_msg: >-
-      sbverify not on PATH after install. On Ubuntu enable universe, or run with
-      -e sbsigntools_package_name=<exact package>.
-
-- name: Run sbverify --version
+- name: Run sbverify --version when present
   ansible.builtin.command:
     argv:
       - bash
@@ -70,9 +94,9 @@
       - sbverify --version 2>&1
   register: sbverify_version
   changed_when: false
+  failed_when: false
+  when: which_sbverify.rc == 0
 
 - name: Report sbverify availability
   ansible.builtin.debug:
-    msg:
-      - "sbverify: {{ which_sbverify.stdout }}"
-      - "{{ sbverify_version.stdout_lines | default([]) }}"
+    msg: "{{ (['sbverify: ' ~ which_sbverify.stdout] + (sbverify_version.stdout_lines | default([]))) if which_sbverify.rc == 0 else ['sbverify not installed; bootloader evidence will use strings/binary heuristics on this host.'] }}"
