@@ -271,6 +271,8 @@
   hosts: linux
   gather_facts: false
   become: true
+  # Minimal SLES images often lack sudo; su is usually present for the same ANSIBLE_PASSWORD
+  become_method: su
   tasks:
     - name: Collect Linux Secure Boot DB and bootloader CA evidence
       ansible.builtin.shell:
