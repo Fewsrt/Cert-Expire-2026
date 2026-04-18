@@ -3,6 +3,7 @@
  * Usage: node tools/firestore-read-collections.mjs
  */
 
+import "./bootstrap-env.mjs";
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";

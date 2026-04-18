@@ -12,7 +12,8 @@
     "test": "node --check public/app.js",
     "present:html": "node tools/gen-html-present.js",
     "push:firestore": "node tools/push-vmca2023-results.mjs",
-    "sync:firestore-cases": "node tools/sync-assessment-to-case-results.mjs"
+    "sync:firestore-cases": "node tools/sync-assessment-to-case-results.mjs",
+    "ansible:assess": "node tools/run-ansible-assessment.mjs"
   },
   "repository": {
     "type": "git",
@@ -29,6 +30,7 @@
     "pdfkit": "^0.17.2"
   },
   "devDependencies": {
+    "dotenv": "^16.4.7",
     "firebase-admin": "^13.8.0",
     "firebase-tools": "^15.15.0"
   }

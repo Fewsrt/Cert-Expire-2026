@@ -8,6 +8,7 @@
  *    OAuth: set FIREBASE_CLIENT_ID / FIREBASE_CLIENT_SECRET, or rely on installed firebase-tools (see load-firebase-cli-oauth.mjs).
  */
 
+import "./bootstrap-env.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";

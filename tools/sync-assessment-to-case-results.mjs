@@ -6,6 +6,7 @@
  * Usage: node tools/sync-assessment-to-case-results.mjs [path/to/secureboot_ca_assessment.json]
  */
 
+import "./bootstrap-env.mjs";
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
