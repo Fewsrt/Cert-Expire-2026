@@ -34,9 +34,19 @@ Useful optional columns:
 | `secure_boot` | vCenter Secure Boot flag for operator context |
 | `firmware` | EFI/BIOS from vCenter |
 | `cluster` | vCenter cluster |
-| `esxi_host` | ESXi host |
+| `esxi_host` | ESXi host (short name or FQDN; used with `govc host.info` on the controller) |
+| `govc_vm_path` | Optional full inventory path to the VM (e.g. `/DC/vm/folder/VMNAME`) when the VM name alone is ambiguous for `govc` |
+| `esxi_version` | Optional copy from your vCenter export (e.g. `ESXi 8.0.3 build …`); if set, the playbook does not re-query vCenter for that host |
 | `ansible_user` | SSH/WinRM user |
 | `ansible_port` | SSH/WinRM port if non-standard |
+
+### ESXi version string from vCenter (real `ESXi x.y.z build …`)
+
+To fill **`esxi_version`** with the same string vCenter shows (not the hostname hint):
+
+1. **Preferred:** Export inventory with `ansible/inventory/vcenter_export_govc.sh` or `vcenter_export_powercli.ps1`. Those scripts write **`esxi_host`** and **`esxi_version`** from vCenter. Keep those columns in the CSV you pass as `VCENTER_CSV`.
+2. **At playbook time:** On the **Ansible controller**, install **`govc`** and **`jq`**, and export **`GOVC_URL`**, **`GOVC_USERNAME`**, **`GOVC_PASSWORD`** (and **`GOVC_INSECURE=1`** or fix TLS/DNS as needed). If **`esxi_version`** is empty in the CSV, the playbook calls **`govc host.info`** using **`esxi_host`**, or resolves the host via **`govc vm.info`** using **`govc_vm_path`** or **`vcenter_vm_name`** (from `vm_name` / `VM` in the CSV).
+3. Optional: **`secureboot_govc_try_inventory_hostname_as_vm: true`** in `inventory/group_vars/all.yml` (or `-e`) only when each Ansible inventory name matches the vCenter VM name.
 
 The inventory script also accepts common PowerCLI column names such as `VM`, `Guest OS`, `GuestFullName`, `PowerState`, `VMHost`, and `Host`.
 

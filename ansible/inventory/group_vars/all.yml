@@ -10,3 +10,7 @@ ansible_become_password: "{{ lookup('env', 'ANSIBLE_PASSWORD') }}"
 # Linux: do not install distro packages during secureboot_ca_assessment by default (uses sbverify/pesign if present).
 # Override: -e secureboot_install_sbsigntools=true  or set true below.
 secureboot_install_sbsigntools: false
+
+# When esxi_version is empty in inventory, try govc on the controller: set true only if
+# inventory host names match vCenter VM names (avoids useless API calls).
+secureboot_govc_try_inventory_hostname_as_vm: false

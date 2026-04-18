@@ -601,26 +601,96 @@
         state: directory
         mode: "0755"
 
-    - name: Read ESXi version from vCenter with govc when inventory has vcenter_host
+    # Real ESXi string (e.g. "ESXi 8.0.3 build …") via govc: same idea as inventory/vcenter_export_govc.sh.
+    # Needs GOVC_URL / credentials on the controller. Supply vcenter_host (ESXi) and/or vm path/name so we can resolve the host.
+    - name: Read ESXi version from vCenter with govc (host and/or VM lookup)
       ansible.builtin.shell: |
         set -o pipefail
-        ESXI_HOST={{ hostvars[item].vcenter_host | default('') | quote }}
-        if [ -z "$ESXI_HOST" ] || ! command -v govc >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        if ! command -v govc >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
           exit 0
         fi
-        govc host.info -json "$ESXI_HOST" 2>/dev/null | jq -r '
-          (.HostSystems[0]? // .hostSystems[0]? // {}) |
-          (.Config.Product // .config.product // {}) as $p |
-          ($p.FullName // $p.fullName // "") as $full |
-          ($p.Version // $p.version // "") as $version |
-          ($p.Build // $p.build // "") as $build |
-          if ($full | length) > 0 then $full
-          elif (($version | length) > 0 and ($build | length) > 0) then "ESXi \($version) build \($build)"
-          elif ($version | length) > 0 then "ESXi \($version)"
-          else "" end
-        '
+
+        product_from_host_json() {
+          local json="$1"
+          [[ -z "$json" ]] && return 1
+          local product full version build
+          product="$(echo "$json" | jq -c '
+            (if type == "array" then .[0] else . end) as $root |
+            ($root.HostSystems[0]? // $root.hostSystems[0]? // {}) as $h |
+            ($h.Config.Product // $h.config.product // {})
+          ' 2>/dev/null || true)"
+          [[ -z "$product" || "$product" == "null" ]] && return 1
+          full="$(echo "$product" | jq -r '.FullName // .fullName // empty' 2>/dev/null || true)"
+          version="$(echo "$product" | jq -r '.Version // .version // empty' 2>/dev/null || true)"
+          build="$(echo "$product" | jq -r '.Build // .build // empty' 2>/dev/null || true)"
+          full="$(echo "$full" | tr -d '\r')"
+          version="$(echo "$version" | tr -d '\r')"
+          build="$(echo "$build" | tr -d '\r')"
+          if [[ -n "${full//[[:space:]]/}" ]]; then
+            printf '%s' "$full"
+            return 0
+          fi
+          if [[ -n "${version//[[:space:]]/}" && -n "${build//[[:space:]]/}" ]]; then
+            printf 'ESXi %s build %s' "$version" "$build"
+            return 0
+          fi
+          if [[ -n "${version//[[:space:]]/}" ]]; then
+            printf 'ESXi %s' "$version"
+            return 0
+          fi
+          return 1
+        }
+
+        product_from_host_text() {
+          local h="$1"
+          [[ -z "$h" ]] && return 1
+          govc host.info "$h" 2>/dev/null | tr -d '\r' | awk -F': ' '/^[[:space:]]*Product:/{gsub(/^[[:space:]]+/,"",$2); print $2; exit}'
+        }
+
+        ESXI_HOST={{ hostvars[item].vcenter_host | default('') | quote }}
+        VM_PATH={{ hostvars[item].vcenter_vm_path | default('') | quote }}
+        VM_NAME={{ hostvars[item].vcenter_vm_name | default('') | quote }}
+        INV_NAME={{ item | quote }}
+
+        VM_REF=""
+        if [[ -n "$VM_PATH" ]]; then VM_REF="$VM_PATH"
+        elif [[ -n "$VM_NAME" ]]; then VM_REF="$VM_NAME"
+        elif [[ "${SECUREBOOT_GOV_TRY_INV_NAME:-0}" == "1" ]]; then VM_REF="$INV_NAME"
+        fi
+
+        json=""
+        H_RESOLVED=""
+
+        if [[ -n "$ESXI_HOST" ]]; then
+          json="$(govc host.info -json "$ESXI_HOST" 2>/dev/null || true)"
+          H_RESOLVED="$ESXI_HOST"
+        fi
+
+        if [[ -z "$json" && -n "$VM_REF" ]]; then
+          VH="$(govc vm.info "$VM_REF" 2>/dev/null | sed -n 's/^[[:space:]]*Host:[[:space:]]*//p' | head -1 | tr -d '\r' | sed 's/[[:space:]]*$//')"
+          if [[ -n "$VH" ]]; then
+            H_RESOLVED="$VH"
+            json="$(govc host.info -json "$H_RESOLVED" 2>/dev/null || true)"
+          fi
+        fi
+
+        OUT=""
+        if [[ -n "$json" ]]; then
+          OUT="$(product_from_host_json "$json" || true)"
+        fi
+        if [[ -z "$OUT" && -n "$H_RESOLVED" ]]; then
+          OUT="$(product_from_host_text "$H_RESOLVED" || true)"
+        fi
+        if [[ -z "$OUT" && -n "$ESXI_HOST" ]]; then
+          OUT="$(product_from_host_text "$ESXI_HOST" || true)"
+        fi
+        if [[ -n "$OUT" ]]; then
+          printf '%s' "$OUT"
+        fi
       args:
         executable: /bin/bash
+      environment:
+        SECUREBOOT_GOV_TRY_INV_NAME: "{{ 1 if (secureboot_govc_try_inventory_hostname_as_vm | default(false) | bool) else 0 }}"
       loop: "{{ _report_hosts }}"
       loop_control:
         label: "{{ item }}"
@@ -628,8 +698,8 @@
       changed_when: false
       failed_when: false
       when:
-        - hostvars[item].vcenter_host | default('') | length > 0
         - hostvars[item].esxi_version | default('', true) | length == 0
+        - (hostvars[item].vcenter_host | default('') | length > 0) or (hostvars[item].vcenter_vm_path | default('') | length > 0) or (hostvars[item].vcenter_vm_name | default('') | length > 0) or (secureboot_govc_try_inventory_hostname_as_vm | default(false) | bool)
 
     - name: Record ESXi version values read from vCenter
       ansible.builtin.set_fact:
@@ -646,7 +716,10 @@
         content: |
           [
           {% for host in _report_hosts %}
-          {% set esxi_version = (hostvars[host].esxi_version | default('', true)) or ((secureboot_esxi_versions | default({})).get(host, '')) %}
+          {% set _esxi_inv = (hostvars[host].esxi_version | default('', true)) or ((secureboot_esxi_versions | default({})).get(host, '')) %}
+          {% set _esxi_maj = host | regex_search('esx([0-9]+)', '\\1', ignorecase=true) | default('', true) %}
+          {% set _esxi_hint = ('ESXi ' ~ _esxi_maj ~ ' (from hostname)') if (_esxi_maj | length > 0) else '' %}
+          {% set esxi_version = _esxi_inv or _esxi_hint %}
           {% if hostvars[host].secureboot_assessment is defined %}
           {% set a = hostvars[host].secureboot_assessment %}
           {{ {'inventory_host': host, 'os_family': a.os_family | default(''), 'esxi_version': esxi_version, 'secure_boot_enabled': a.secure_boot_enabled | default(''), 'db_has_2011': a.db_has_2011 | default(''), 'db_has_2023': a.db_has_2023 | default(''), 'kek_has_2023': a.kek_has_2023 | default(''), 'dbx_readable': a.dbx_readable | default(''), 'active_bootloader_file': a.active_bootloader_file | default(''), 'active_bootloader_has_2011': a.active_bootloader_has_2011 | default(''), 'active_bootloader_has_2023': a.active_bootloader_has_2023 | default(''), 'active_bootloader_signature_method': a.active_bootloader_signature_method | default('')} | to_nice_json }}
@@ -664,7 +737,10 @@
         content: |
           inventory_host,os_family,esxi_version,secure_boot_enabled,db_has_2011,db_has_2023,kek_has_2023,dbx_readable,active_bootloader_file,active_bootloader_has_2011,active_bootloader_has_2023,active_bootloader_signature_method
           {% for host in _report_hosts %}
-          {% set esxi_version = (hostvars[host].esxi_version | default('', true)) or ((secureboot_esxi_versions | default({})).get(host, '')) %}
+          {% set _esxi_inv = (hostvars[host].esxi_version | default('', true)) or ((secureboot_esxi_versions | default({})).get(host, '')) %}
+          {% set _esxi_maj = host | regex_search('esx([0-9]+)', '\\1', ignorecase=true) | default('', true) %}
+          {% set _esxi_hint = ('ESXi ' ~ _esxi_maj ~ ' (from hostname)') if (_esxi_maj | length > 0) else '' %}
+          {% set esxi_version = _esxi_inv or _esxi_hint %}
           {% set a = hostvars[host].secureboot_assessment | default({}) %}
           {% if a %}
           {{ host }},{{ a.os_family | default('') }},"{{ esxi_version | replace('"', '""') }}",{{ a.secure_boot_enabled | default('') }},{{ a.db_has_2011 | default('') }},{{ a.db_has_2023 | default('') }},{{ a.kek_has_2023 | default('') }},{{ a.dbx_readable | default('') }},"{{ (a.active_bootloader_file | default('')) | replace('"', '""') }}",{{ a.active_bootloader_has_2011 | default('') }},{{ a.active_bootloader_has_2023 | default('') }},"{{ (a.active_bootloader_signature_method | default('')) | replace('"', '""') }}"
