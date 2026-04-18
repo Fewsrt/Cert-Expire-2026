@@ -51,6 +51,9 @@ def detect_os_family(row: dict[str, str]) -> str:
     ).lower()
     if "windows" in text or explicit.lower() == "windows":
         return "windows"
+    # VM names like *Server2025* / *Server2019* (guest_os often unknown without Tools)
+    if any(x in text for x in ("server201", "server202", "server200")):
+        return "windows"
     return "linux"
 
 

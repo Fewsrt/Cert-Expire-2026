@@ -118,6 +118,9 @@ while IFS= read -r vm_path; do
     os_family="windows"
   elif [[ "$n_l" == *windows* || "$n_l" == *win-serve* || "$n_l" == *win201* || "$n_l" == *win202* || "$n_l" == *ws20* ]]; then
     os_family="windows"
+  # Typical Microsoft VM names even with typos (e.g. Widows) or without "windows" in the string
+  elif [[ "$n_l" == *server201* || "$n_l" == *server202* || "$n_l" == *server200* || "$n_l" == *server20[0-9]* ]]; then
+    os_family="windows"
   fi
 
   sb_raw="false"
