@@ -4,3 +4,6 @@ dist/
 .firebase/
 __pycache__/
 *.py[cod]
+
+# Local govc / API dumps (environment-specific)
+ansible/inventory/test.json

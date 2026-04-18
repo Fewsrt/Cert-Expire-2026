@@ -53,7 +53,8 @@ vm_from_json() {
   local json="$1"
   [[ -z "$json" ]] && echo "" && return
   # govc vm.info -json wraps the VM in VirtualMachines[0]
-  echo "$json" | jq -c '.VirtualMachines[0]? // empty' 2>/dev/null
+  # govc uses VirtualMachines[]; some dumps/APIs use virtualMachines[] (camelCase).
+  echo "$json" | jq -c '(.VirtualMachines[0]? // .virtualMachines[0]?) // empty' 2>/dev/null
 }
 
 # Positional vm.info -json can return VirtualMachines: [] for /DC/vm/... paths; -vm.ipath fixes it.
@@ -62,7 +63,7 @@ govc_fetch_vm_json() {
   case "$p" in
     /*/vm/*)
       json="$(govc vm.info -json=true -vm.ipath="$p" 2>/dev/null || true)"
-      n="$(echo "${json:-}" | jq '.VirtualMachines // [] | length' 2>/dev/null || echo 0)"
+      n="$(echo "${json:-}" | jq '(.VirtualMachines // .virtualMachines // []) | length' 2>/dev/null || echo 0)"
       ;;
   esac
   if [[ -z "$json" || "$n" -eq 0 ]]; then
@@ -71,19 +72,69 @@ govc_fetch_vm_json() {
   printf '%s' "$json"
 }
 
+# When vm.info -json yields no VirtualMachines[], try -vm.uuid (from text vm.info) then PropertyCollector.
+vm_from_object_collect() {
+  local p="$1" oc
+  oc="$(govc object.collect -json "$p" name guest config runtime 2>/dev/null || govc collect -json "$p" name guest config runtime 2>/dev/null || true)"
+  [[ -z "$oc" ]] && { echo ""; return 1; }
+  echo "$oc" | jq -c '
+    (if type == "array" then . else [] end) |
+    (map(select((.Name//.name)=="name"))[0] | (.Val//.val)) as $vname |
+    (map(select((.Name//.name)=="guest"))[0] | (.Val//.val)) as $guest |
+    (map(select((.Name//.name)=="config"))[0] | (.Val//.val)) as $config |
+    (map(select((.Name//.name)=="runtime"))[0] | (.Val//.val)) as $runtime |
+    {
+      Name: ($vname | if type == "string" then . else null end),
+      Guest: {
+        GuestFullName: ($guest | .guestFullName // .GuestFullName // ""),
+        HostName: ($guest | .hostName // .HostName // "")
+      },
+      Config: {
+        GuestId: ($config | .guestId // .GuestId // ""),
+        Firmware: ($config | .firmware // .Firmware // ""),
+        BootOptions: {
+          EfiSecureBootEnabled: (
+            $config | (.bootOptions // .BootOptions)
+            | if . then (.efiSecureBootEnabled // .EfiSecureBootEnabled // false) else false end
+          )
+        }
+      },
+      Runtime: { PowerState: ($runtime | .powerState // .PowerState // "") }
+    }
+  ' 2>/dev/null || echo ""
+}
+
+govc_vm_record_from_path() {
+  local p="$1" json vmj u j2
+  json="$(govc_fetch_vm_json "$p")"
+  vmj="$(vm_from_json "$json")"
+  if [[ -n "$vmj" && "$vmj" != "null" ]]; then
+    printf '%s' "$vmj"
+    return 0
+  fi
+  u="$(govc vm.info "$p" 2>/dev/null | sed -n 's/^[[:space:]]*UUID:[[:space:]]*//p' | head -1)"
+  if [[ -n "$u" ]]; then
+    j2="$(govc vm.info -json=true -vm.uuid="$u" 2>/dev/null || govc vm.info -json -vm.uuid="$u" 2>/dev/null || true)"
+    vmj="$(vm_from_json "$j2")"
+    if [[ -n "$vmj" && "$vmj" != "null" ]]; then
+      printf '%s' "$vmj"
+      return 0
+    fi
+  fi
+  vm_from_object_collect "$p"
+}
+
 paths_seen=0
 rows_out=0
 while IFS= read -r vm_path; do
   [[ -z "$vm_path" ]] && continue
   paths_seen=$((paths_seen + 1))
 
-  json="$(govc_fetch_vm_json "$vm_path")"
-  [[ "$DEBUG" == "1" && -z "$json" ]] && echo "vcenter_export_govc: empty vm.info json: $vm_path" >&2
-
-  vm_json="$(vm_from_json "$json")"
+  vm_json="$(govc_vm_record_from_path "$vm_path")"
+  [[ "$DEBUG" == "1" && -z "$vm_json" ]] && echo "vcenter_export_govc: no vm record from govc: $vm_path" >&2
   name=""
   if [[ -n "$vm_json" && "$vm_json" != "null" ]]; then
-    name="$(echo "$vm_json" | jq -r '.Name // empty' 2>/dev/null || true)"
+    name="$(echo "$vm_json" | jq -r '.Name // .name // empty' 2>/dev/null || true)"
   fi
   # Fallback: inventory path basename (always have a row per govc find)
   if [[ -z "$name" ]]; then
@@ -96,7 +147,7 @@ while IFS= read -r vm_path; do
   ip="$(govc vm.ip "$vm_path" 2>/dev/null | head -1 | tr -d '\r' || true)"
   guest_host=""
   if [[ -n "$vm_json" && "$vm_json" != "null" ]]; then
-    guest_host="$(echo "$vm_json" | jq -r '.Guest.HostName // empty' 2>/dev/null || true)"
+    guest_host="$(echo "$vm_json" | jq -r '.Guest.HostName // .guest.hostName // empty' 2>/dev/null || true)"
   fi
   if [[ -n "$ip" ]]; then
     ansible_host="$ip"
@@ -109,8 +160,8 @@ while IFS= read -r vm_path; do
   guest_os=""
   guest_id=""
   if [[ -n "$vm_json" && "$vm_json" != "null" ]]; then
-    guest_os="$(echo "$vm_json" | jq -r '.Guest.GuestFullName // ""' 2>/dev/null || true)"
-    guest_id="$(echo "$vm_json" | jq -r '.Config.GuestId // ""' 2>/dev/null || true)"
+    guest_os="$(echo "$vm_json" | jq -r '.Guest.GuestFullName // .guest.guestFullName // .Config.guestFullName // .config.guestFullName // ""' 2>/dev/null || true)"
+    guest_id="$(echo "$vm_json" | jq -r '.Config.GuestId // .config.guestId // ""' 2>/dev/null || true)"
   fi
   # When Tools/guest is empty, GuestId still reflects the configured OS type (e.g. windows2019srv_64Guest)
   if [[ -z "${guest_os//[[:space:]]/}" && -n "$guest_id" ]]; then
@@ -137,7 +188,7 @@ while IFS= read -r vm_path; do
 
   sb_raw="false"
   if [[ -n "$vm_json" && "$vm_json" != "null" ]]; then
-    sb_raw="$(echo "$vm_json" | jq -r '.Config.BootOptions.EfiSecureBootEnabled // false' 2>/dev/null || echo false)"
+    sb_raw="$(echo "$vm_json" | jq -r '.Config.BootOptions.EfiSecureBootEnabled // .config.bootOptions.efiSecureBootEnabled // false' 2>/dev/null || echo false)"
   fi
   if [[ "$sb_raw" == "true" ]]; then
     secure_boot="ON"
@@ -148,8 +199,8 @@ while IFS= read -r vm_path; do
   firmware="unknown"
   power_state=""
   if [[ -n "$vm_json" && "$vm_json" != "null" ]]; then
-    firmware="$(echo "$vm_json" | jq -r '.Config.Firmware // "unknown"' 2>/dev/null || echo unknown)"
-    power_state="$(echo "$vm_json" | jq -r '.Runtime.PowerState // ""' 2>/dev/null || true)"
+    firmware="$(echo "$vm_json" | jq -r '.Config.Firmware // .config.firmware // "unknown"' 2>/dev/null || echo unknown)"
+    power_state="$(echo "$vm_json" | jq -r '.Runtime.PowerState // .runtime.powerState // ""' 2>/dev/null || true)"
   fi
   cluster=""
 
