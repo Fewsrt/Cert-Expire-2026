@@ -5,7 +5,7 @@
 # One host (replace NAME with inventory hostname from your CSV):
 #   cd ansible && VCENTER_CSV=/path/to.csv ansible-playbook playbooks/install_sbsigntools_linux.yml --limit NAME
 #
-# Override package name if your distro uses a different binary package (rare):
+# Override package name if your distro uses a different binary package:
 #   -e sbsigntools_package_name=sbsigntool
 #
 # Debian/Ubuntu: enable universe/contrib if apt reports "Unable to locate package".
@@ -17,10 +17,39 @@
   become_method: "{{ 'su' if (inventory_hostname | lower | regex_search('^sle')) else 'sudo' }}"
 
   tasks:
-    - name: Install sbsigntools package
+    - name: Install package (explicit -e sbsigntools_package_name=...)
       ansible.builtin.package:
-        name: "{{ sbsigntools_package_name | default('sbsigntools') }}"
+        name: "{{ sbsigntools_package_name }}"
         state: present
+      when: sbsigntools_package_name | default('') | length > 0
+
+    - name: Debian/Ubuntu — try package sbsigntools
+      ansible.builtin.apt:
+        name: sbsigntools
+        state: present
+        update_cache: true
+      register: apt_sbsigntools
+      ignore_errors: true
+      when:
+        - sbsigntools_package_name | default('') | length == 0
+        - ansible_facts['os_family'] == 'Debian'
+
+    - name: Debian/Ubuntu — fallback package sbsigntool (common on Ubuntu)
+      ansible.builtin.apt:
+        name: sbsigntool
+        state: present
+      when:
+        - sbsigntools_package_name | default('') | length == 0
+        - ansible_facts['os_family'] == 'Debian'
+        - apt_sbsigntools is failed
+
+    - name: RHEL/SUSE/Others — package sbsigntools
+      ansible.builtin.package:
+        name: sbsigntools
+        state: present
+      when:
+        - sbsigntools_package_name | default('') | length == 0
+        - ansible_facts['os_family'] != 'Debian'
 
     - name: Verify sbverify is on PATH
       ansible.builtin.command:
@@ -36,8 +65,8 @@
         that:
           - which_sbverify.rc == 0
         fail_msg: >-
-          sbverify not on PATH after installing {{ sbsigntools_package_name | default('sbsigntools') }}.
-          Try -e sbsigntools_package_name=... or enable the right repo (e.g. Ubuntu universe).
+          sbverify not on PATH after install. On Ubuntu enable universe, or run with
+          -e sbsigntools_package_name=<exact package>.
 
     - name: Run sbverify --version
       ansible.builtin.command:
